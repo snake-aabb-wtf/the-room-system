@@ -1,0 +1,24 @@
+# The Room System 配置
+# 大部分有默认值，按需修改即可。删掉本文件也能用默认跑起来。
+
+[server]
+host = "0.0.0.0"
+port = 3005
+
+[storage]
+# 单文件最大体积（字节）。0 = 不限制。
+# 默认 50GB，局域网基本够用。
+max_file_size = 53687091200
+
+[rooms]
+# 预置房间：{"房间名": "口令"}。口令是你口头告诉对方的钥匙。
+# 任意非预置口令也会即时创建一个临时房间。
+[rooms.preset]
+agnes = "agnes2024"
+
+[admin]
+# 留空或写成 "admin"，首次启动会自动生成随机口令并打印到控制台，
+# 同时写回本文件。你也可以直接在这里填一个自己的。
+# Leave empty / "admin" and a random password is auto-generated on first run
+# (printed to console and written back here). Or set your own.
+password = ""

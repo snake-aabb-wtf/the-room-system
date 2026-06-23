@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>分享链接 · The Room</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap narrow" style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px">
+  <div class="login-box" style="width:100%">
+    {% if not valid %}
+      <h1>🔗 分享已失效</h1>
+      <div class="lead">这个分享链接不存在、已被吊销或已过期。</div>
+      <div class="lead">请联系分享者重新生成一个，或直接到首页输入房间口令进入。</div>
+      <a class="btn" style="width:100%;display:block;text-align:center" href="/">← 返回首页</a>
+    {% else %}
+      <h1>🔗 收到分享</h1>
+      <div class="lead">这是一个有效的房间分享链接。进入房间需要房间口令（向分享者索取）。</div>
+      <div class="err" id="err" style="display:none">口令错误</div>
+      <input type="password" id="pw" placeholder="输入房间口令" autofocus
+             onkeydown="if(event.key==='Enter')go()">
+      <button class="btn" style="width:100%" onclick="go()">→ 进入房间</button>
+    {% endif %}
+  </div>
+</div>
+<script>
+function go(){
+  var pw=document.getElementById('pw').value.trim();
+  if(!pw)return;
+  fetch('/auth',{method:'POST',body:new URLSearchParams({password:pw})})
+    .then(function(r){if(r.ok){window.location.href='/room';}else{document.getElementById('err').style.display='block';}})
+    .catch(function(){document.getElementById('err').style.display='block';});
+}
+</script>
+</body>
+</html>

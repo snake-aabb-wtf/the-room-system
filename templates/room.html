@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>房间 · {{ rh[:8] }}</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+/* Markdown / 文本预览容器 */
+.md-body{max-width:80vw;max-height:80vh;overflow:auto;background:#1a1a26;padding:24px 28px;border-radius:8px;line-height:1.7;color:#e6e6f0}
+.md-body h1,.md-body h2,.md-body h3{margin:14px 0 6px;color:#fff}
+.md-body pre{background:#0f0f12;padding:12px;border-radius:6px;overflow:auto}
+.md-body code{background:#0f0f12;padding:1px 5px;border-radius:3px;color:#4ec9b0;font-size:13px}
+.md-body pre code{color:#cfd2dc}
+.md-body a{color:#4ec9b0}.md-body blockquote{border-left:3px solid #4ec9b0;padding-left:12px;color:#9a9ab0;margin:6px 0}
+.md-body ul{padding-left:22px}.md-body img{border-radius:6px}
+.text-pre{max-width:80vw;max-height:80vh;overflow:auto;background:#0f0f12;border-radius:8px;padding:18px}
+.text-pre pre{margin:0;font-family:"Cascadia Code",Consolas,monospace;font-size:13px;white-space:pre-wrap;word-break:break-all;color:#cfd2dc}
+/* 分享面板 */
+.share-list{margin-top:10px}.share-list .si{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.share-list .si code{color:var(--accent);font-size:11px}
+.ttl-row{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px}
+.ttl-row select{padding:5px 8px;font-size:12px;width:auto}
+.exp-badge{font-size:10px;background:#2a2a3d;color:#f1c40f;padding:1px 6px;border-radius:4px;margin-left:4px}
+.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#2ecc71;margin-right:4px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="title">📁 房间 <code style="color:var(--accent)">{{ rh[:8] }}…</code></div>
+  <div class="sub"><span class="online-dot"></span><span id="count">{{ files|length }}</span> 个文件 · <span id="online">-</span> 在线</div>
+  <div class="spacer"></div>
+  <span class="muted tiny" id="nickchip">昵称：匿名</span>
+  <a href="#" class="exit" onclick="setNick();return false">✏️ 昵称</a>
+  <a href="#" class="exit" onclick="openShare();return false">🔗 分享</a>
+  <a href="/" class="exit">退出</a>
+</div>
+
+<div class="wrap">
+  <!-- 上传区 -->
+  <div class="dropzone" id="dz" onclick="document.getElementById('filepicker').click()">
+    <div class="big">⬆️</div>
+    <div><strong>点击选择</strong> 或 拖文件到这里上传</div>
+    <div class="tiny">支持多文件 / 大文件，实时进度</div>
+    <input type="file" id="filepicker" multiple style="display:none" onchange="onPick(this.files)">
+  </div>
+  <div class="upload-queue" id="queue"></div>
+
+  <!-- 信息条 -->
+  <div class="infobar">
+    <div class="row"><span class="lbl">🔑 房间口令</span>
+      <span class="pw-chip" id="pwchip">（已隐藏，点击显示）</span>
+      <button class="copy" onclick="togglePw()">显示</button></div>
+    <div class="row"><span class="lbl">📡 访问地址</span>
+      {% for u in urls %}
+        <code>{{ u }}/room</code>
+        <button class="copy" onclick="copy('{{ u }}/room')">复制</button>
+      {% endfor %}
+    </div>
+    <div class="row"><span class="lbl">📟 二维码</span>
+      <button class="btn small ghost" onclick="showQR(false)">房间二维码</button>
+      <button class="btn small ghost" onclick="showQR(true)">口令二维码</button>
+    </div>
+    <div class="row"><span class="lbl">⌨️ curl</span>
+      <code style="font-size:11px">curl -T 文件 {{ urls[0] }}/upload/{{ rh }}/raw -H "X-Filename: 文件名"</code>
+    </div>
+  </div>
+
+  <!-- 工具栏 -->
+  <div class="toolbar">
+    <div class="search">
+      <span class="ico">🔍</span>
+      <input id="q" placeholder="搜索文件名…" oninput="filterFiles()">
+    </div>
+    <select id="sort" onchange="renderFiles()" style="min-width:130px">
+      <option value="time">最新优先</option>
+      <option value="name">名字排序</option>
+      <option value="size_desc">大到小</option>
+      <option value="size_asc">小到大</option>
+    </select>
+    <button class="btn small ghost" onclick="toggleView()" id="viewbtn">⊞ 网格</button>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <div id="list" style="display:none"></div>
+  <div class="empty" id="empty" style="display:none">
+    <div class="big">📂</div>这个房间还没有文件<br><span class="muted">拖个文件上来试试吧</span>
+  </div>
+
+  <!-- 房间留言 -->
+  <div class="chat">
+    <div class="muted" style="font-size:13px;margin-bottom:8px">💬 房间留言（实时）</div>
+    <div class="msgs" id="msgs"></div>
+    <form onsubmit="postMsg();return false">
+      <input id="msgbody" placeholder="说点什么…" maxlength="1000">
+      <button class="btn small" type="submit">发送</button>
+    </form>
+  </div>
+</div>
+
+<!-- 上传时到期选项 -->
+<div id="ttlBar" style="display:none"></div>
+
+<!-- 分享弹层 -->
+<div class="modal-bg" id="sharebg" onclick="if(event.target===this)closeShare()">
+  <div class="modal" style="max-width:420px">
+    <h3>🔗 生成分享链接</h3>
+    <div class="muted tiny" style="margin-bottom:10px">生成一个可转发的链接，对方打开后仍需房间口令进入。可随时吊销。</div>
+    <div class="ttl-row">
+      <span class="muted">有效期：</span>
+      <select id="shTtl"><option value="">永久</option><option value="1">1 小时</option><option value="24">1 天</option><option value="168">7 天</option></select>
+      <input id="shLabel" placeholder="备注（可选）" style="flex:1">
+      <button class="btn small" onclick="mkShare()">生成</button>
+    </div>
+    <div class="share-list" id="shareList"></div>
+    <button class="btn sec close" style="width:100%" onclick="closeShare()">关闭</button>
+  </div>
+</div>
+
+<!-- 二维码弹层 -->
+<div class="modal-bg" id="qrbg" onclick="if(event.target===this)hideQR()">
+  <div class="modal">
+    <h3 id="qrtitle">扫码进入房间</h3>
+    <div class="qr" id="qrbox"></div>
+    <div class="muted tiny" id="qrsub" style="text-align:center;margin-bottom:10px"></div>
+    <button class="btn sec close" onclick="hideQR()">关闭</button>
+  </div>
+</div>
+
+<!-- 预览灯箱 -->
+<div class="lightbox" id="lb" onclick="if(event.target===this)closeLb()">
+  <button class="lb-close" onclick="closeLb()">×</button>
+  <div class="lb-inner" id="lbinner"></div>
+</div>
+
+<script>
+const RH = "{{ rh }}";
+let FILES = {{ files | tojson }};
+let SESSION_PW = sessionStorage.getItem('pw_'+RH) || "";
+let VIEW = 'grid'; // grid | list
+
+document.getElementById('nickchip').textContent = "昵称：" + (getCookie('nick')||"匿名");
+const ICON = {video:'🎬',audio:'🎵',image:'🖼️',text:'📄',code:'💻',pdf:'📕',file:'📁'};
+
+function renderFiles(){
+  const q = document.getElementById('q').value.toLowerCase().trim();
+  const sort = document.getElementById('sort').value;
+  let list = FILES.slice();
+  if(q) list = list.filter(f=>f.name.toLowerCase().includes(q));
+  if(sort==='name') list.sort((a,b)=>a.name.localeCompare(b.name,'zh'));
+  else if(sort==='size_desc') list.sort((a,b)=>b.size-a.size);
+  else if(sort==='size_asc') list.sort((a,b)=>a.size-b.size);
+  else list.sort((a,b)=>b.created_at-a.created_at);
+
+  const grid=document.getElementById('grid');
+  const listEl=document.getElementById('list');
+  const empty=document.getElementById('empty');
+  const target = VIEW==='grid'?grid:listEl;
+  grid.style.display = VIEW==='grid'?'':'none';
+  listEl.style.display = VIEW==='list'?'':'none';
+  target.innerHTML='';
+  if(!list.length){empty.style.display='block';grid.innerHTML='';listEl.innerHTML='';}
+  else{empty.style.display='none'; list.forEach(f=>target.appendChild(card(f)));}
+  document.getElementById('count').textContent = list.length;
+}
+function expBadge(f){
+  if(!f.expires_at && f.expires_at!==0) return '';
+  if(f.expires_at===0) return '';
+  const left = f.expires_at - Date.now()/1000;
+  if(left<=0) return '<span class="exp-badge">已过期</span>';
+  if(left<3600) return '<span class="exp-badge">'+Math.round(left/60)+'分</span>';
+  if(left<86400) return '<span class="exp-badge">'+Math.round(left/3600)+'时</span>';
+  return '<span class="exp-badge">'+Math.round(left/86400)+'天</span>';
+}
+function card(f){
+  const el=document.createElement('div');
+  if(VIEW==='grid'){ el.className='fcard';
+    const preview = f.kind!=='file';
+    el.innerHTML = `
+      <div class="ficon">${ICON[f.kind]||'📁'}</div>
+      <div class="fname">${esc(f.name)} ${expBadge(f)}</div>
+      <div class="fmeta"><span>${f.size_h}</span><span>${f.when}</span>${f.dl?`<span>↓${f.dl}</span>`:''}${f.by?`<span>👤${esc(f.by)}</span>`:''}</div>
+      <div class="facts">
+        ${preview?`<button class="btn small" onclick="preview(${f.id})">预览</button>`:''}
+        <a class="btn small sec" href="/dl/${RH}/${encodeURIComponent(f.name)}" target="_blank">打开</a>
+        <a class="btn small sec" href="/raw/${RH}/${encodeURIComponent(f.name)}">下载</a>
+        <button class="btn small ghost" onclick="renameF('${esc(f.name)}')">改名</button>
+        <button class="btn small ghost" onclick="delF('${esc(f.name)}')">删</button>
+      </div>`;
+  } else {
+    el.className='fcard'; el.style.cssText='flex-direction:row;align-items:center;gap:12px;padding:8px 12px';
+    const preview = f.kind!=='file';
+    el.innerHTML = `
+      <span style="font-size:20px">${ICON[f.kind]||'📁'}</span>
+      <span class="fname" style="flex:1">${esc(f.name)} ${expBadge(f)}</span>
+      <span class="fmeta"><span>${f.size_h}</span> · ${f.when}${f.dl?` · ↓${f.dl}`:''}</span>
+      <div class="facts">
+        ${preview?`<button class="btn small" onclick="preview(${f.id})">预览</button>`:''}
+        <a class="btn small sec" href="/raw/${RH}/${encodeURIComponent(f.name)}">下载</a>
+        <button class="btn small ghost" onclick="delF('${esc(f.name)}')">删</button>
+      </div>`;
+  }
+  return el;
+}
+function toggleView(){ VIEW = VIEW==='grid'?'list':'grid';
+  document.getElementById('viewbtn').textContent = VIEW==='grid'?'☰ 列表':'⊞ 网格'; renderFiles(); }
+function filterFiles(){renderFiles();}
+
+// 上传（带可选到期）
+let UPLOAD_TTL = "";
+function onPick(files){ for(const f of files) uploadOne(f); }
+function uploadOne(file){
+  const id='uq'+Date.now()+Math.random().toString(36).slice(2,5);
+  document.getElementById('queue').insertAdjacentHTML('afterbegin',
+    `<div class="uq-item" id="${id}"><div class="uq-name"><span>${esc(file.name)}</span><span class="tiny"></span></div><div class="bar"><i></i></div></div>`);
+  const item=document.getElementById(id);
+  const bar=item.querySelector('.bar > i');
+  const stat=item.querySelector('.uq-name span:last-child');
+  const xhr=new XMLHttpRequest();
+  const fd=new FormData(); fd.append('file',file); fd.append('ttl',UPLOAD_TTL);
+  xhr.upload.onprogress=e=>{if(e.lengthComputable){const p=e.loaded/e.total*100;bar.style.width=p+'%';stat.textContent=Math.round(p)+'%';}};
+  xhr.onload=()=>{
+    if(xhr.status===200){
+      const d=JSON.parse(xhr.responseText);
+      bar.style.width='100%';item.querySelector('.bar').className='bar ok';stat.textContent='✓ '+d.size_h;
+      FILES.unshift({id:Date.now(),name:d.name,size:d.size,size_h:d.size_h,ext:'',kind:kindOf(d.name),when:justNow(),dl:0,by:getCookie('nick')||'',created_at:Date.now()/1000,expires_at:UPLOAD_TTL?Date.now()/1000+parseFloat(UPLOAD_TTL)*3600:0});
+      renderFiles(); setTimeout(()=>item.remove(),1500);
+    }else{item.querySelector('.bar').className='bar err';stat.textContent='失败';}
+  };
+  xhr.onerror=()=>{item.querySelector('.bar').className='bar err';stat.textContent='网络错误';};
+  xhr.open('POST',`/upload/${RH}`); xhr.send(fd);
+}
+function kindOf(name){const e=name.split('.').pop().toLowerCase();
+  return(['mp4','webm','mov','mkv','avi','m4v'].includes(e)?'video':
+   ['mp3','wav','ogg','flac','m4a','aac'].includes(e)?'audio':
+   ['jpg','jpeg','png','gif','webp','bmp','svg'].includes(e)?'image':
+   ['txt','log','csv','json','yaml','yml','ini'].includes(e)?'text':
+   ['md'].includes(e)?'text':
+   ['py','js','ts','html','css','java','c','cpp','go','rs','sh'].includes(e)?'code':
+   e==='pdf'?'pdf':'file');}
+
+// 拖放
+let dz=document.getElementById('dz');
+['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('drag');}));
+dz.addEventListener('drop',e=>{for(const f of e.dataTransfer.files) uploadOne(f);});
+
+function renameF(name){
+  const nn=prompt('新名字：',name); if(!nn||nn===name)return;
+  fetch(`/rename/${RH}`,{method:'POST',body:new URLSearchParams({name:name,new_name:nn})})
+    .then(r=>r.json()).then(d=>{if(d.ok){const f=FILES.find(x=>x.name===name);if(f)f.name=d.name;renderFiles();}else alert('失败');});
+}
+function delF(name){
+  if(!confirm('删除 "'+name+'" ？'))return;
+  fetch(`/delete/${RH}`,{method:'POST',body:new URLSearchParams({name:name})})
+    .then(r=>r.json()).then(d=>{if(d.ok){FILES=FILES.filter(x=>x.name!==name);renderFiles();}});
+}
+
+function togglePw(){
+  const chip=document.getElementById('pwchip');
+  if(SESSION_PW){ if(chip.dataset.show==='1'){chip.textContent='（已隐藏）';chip.dataset.show='0';}
+    else{chip.textContent=SESSION_PW;chip.dataset.show='1';} }
+  else{ const p=prompt('为安全起见，请重新输入口令以显示（仅本次会话）：');
+    if(p){SESSION_PW=p;sessionStorage.setItem('pw_'+RH,p);chip.textContent=p;chip.dataset.show='1';} }
+}
+
+// 二维码
+function showQR(isPw){
+  const base="{{ urls[0] }}";
+  const text = isPw ? (SESSION_PW||prompt('输入要生成二维码的口令：')) : (base+"/room");
+  if(!text){return;}
+  document.getElementById('qrtitle').textContent = isPw?'口令二维码':'房间入口二维码';
+  document.getElementById('qrsub').textContent = isPw?'把口令二维码发给对方':'对方扫码后需输入口令进入';
+  document.getElementById('qrbox').innerHTML =
+    `<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(text)}" width="220" height="220" alt="qr"
+      onerror="this.outerHTML='<div class=&quot;muted&quot; style=&quot;padding:40px&quot;>离线时请手动复制口令</div>'">`;
+  document.getElementById('qrbg').classList.add('show');
+}
+function hideQR(){document.getElementById('qrbg').classList.remove('show');}
+
+// 预览灯箱 —— Phase 3 增强
+function preview(id){
+  const f=FILES.find(x=>x.id===id); if(!f)return;
+  const url=`/dl/${RH}/${encodeURIComponent(f.name)}`;
+  const inner=document.getElementById('lbinner');
+  const close = ()=>{};
+  if(f.kind==='image'){
+    inner.innerHTML=`<img src="${url}">`;
+    openLb();
+  } else if(f.kind==='video'){
+    inner.innerHTML=`<video src="${url}" controls autoplay></video>`;
+    openLb();
+  } else if(f.kind==='audio'){
+    inner.innerHTML=`<audio src="${url}" controls autoplay style="width:400px"></audio>`;
+    openLb();
+  } else if(f.kind==='pdf'){
+    inner.innerHTML=`<embed src="${url}" type="application/pdf" style="width:80vw;height:80vh">`;
+    openLb();
+  } else if(f.name.toLowerCase().endsWith('.md')){
+    inner.innerHTML=`<div class="md-body" id="mdbox"><div class="muted">渲染中…</div></div>`;
+    openLb();
+    fetch(`/view/${RH}/md/${encodeURIComponent(f.name)}`).then(r=>r.json()).then(d=>{
+      document.getElementById('mdbox').innerHTML=d.html||'<div class="muted">（空）</div>';
+    });
+  } else if(f.kind==='text'||f.kind==='code'){
+    inner.innerHTML=`<div class="text-pre"><pre id="tbox">加载中…</pre></div>`;
+    openLb();
+    fetch(`/view/${RH}/text/${encodeURIComponent(f.name)}`).then(r=>r.json()).then(d=>{
+      document.getElementById('tbox').textContent=d.text;
+    });
+  } else {
+    inner.innerHTML=`<div class="md-body" style="text-align:center"><div style="font-size:40px">📁</div><p>该类型无在线预览</p><a class="btn" href="/raw/${RH}/${encodeURIComponent(f.name)}">下载文件</a></div>`;
+    openLb();
+  }
+}
+function openLb(){document.getElementById('lb').classList.add('show');}
+function closeLb(){document.getElementById('lb').classList.remove('show');document.getElementById('lbinner').innerHTML='';}
+
+// 昵称
+function setNick(){
+  const n=prompt('设置你的昵称：',getCookie('nick')||''); if(n===null)return;
+  fetch(`/nick/${RH}`,{method:'POST',body:new URLSearchParams({nick:n})})
+    .then(r=>r.json()).then(d=>{document.getElementById('nickchip').textContent='昵称：'+d.nick;document.cookie='nick='+encodeURIComponent(d.nick)+';max-age=2592000';});
+}
+
+// 留言：WebSocket 实时 + HTTP 拉取历史
+let WS=null;
+function connectWs(){
+  const proto = location.protocol==='https:'?'wss':'ws';
+  WS = new WebSocket(`${proto}://${location.host}/ws/${RH}`);
+  WS.onmessage = ev=>{
+    const msg = JSON.parse(ev.data);
+    if(msg.type==='message'){ appendMsg(msg); }
+    else if(msg.type==='upload'){ flashNewFile(msg.name); }
+    else if(msg.type==='delete'){ FILES=FILES.filter(x=>x.name!==msg.name); renderFiles(); }
+  };
+  WS.onopen = ()=>{document.getElementById('online').textContent='已连接';};
+  WS.onclose = ()=>{document.getElementById('online').textContent='重连中'; setTimeout(connectWs,3000);};
+}
+function flashNewFile(name){
+  // 别人传了新文件，轻提示并刷新列表
+  if(!FILES.find(f=>f.name===name)){
+    fetch(`/api/${RH}/files`).then(r=>r.json()).then(list=>{
+      const m={}; FILES.forEach(f=>m[f.name]=1);
+      list.forEach(f=>{ if(!m[f.name]) FILES.unshift({id:Date.now()+Math.random(),name:f.name,size:f.size,size_h:fmtSize(f.size),ext:f.ext,kind:kindOf(f.name),when:justNow(),dl:f.dl||0,created_at:Date.now()/1000}); });
+      renderFiles();
+    });
+  }
+}
+function loadMsgs(){
+  fetch(`/api/${RH}/messages`).then(r=>r.json()).then(list=>{
+    const box=document.getElementById('msgs'); box.innerHTML='';
+    list.forEach(m=>appendMsg(m));
+  });
+}
+function appendMsg(m){
+  const box=document.getElementById('msgs');
+  const div=document.createElement('div'); div.className='msg';
+  div.innerHTML=`<span class="who">${esc(m.author)}</span>：${esc(m.body)}<span class="when">${m.when}</span>`;
+  box.appendChild(div); box.scrollTop=box.scrollHeight;
+}
+function postMsg(){
+  const body=document.getElementById('msgbody').value.trim(); if(!body)return;
+  // 优先走 WebSocket；不通则 HTTP
+  if(WS && WS.readyState===1){
+    WS.send(JSON.stringify({kind:'message',body:body}));
+    document.getElementById('msgbody').value='';
+  } else {
+    fetch(`/api/${RH}/messages`,{method:'POST',body:new URLSearchParams({body:body})})
+      .then(r=>r.json()).then(d=>{if(d.ok){document.getElementById('msgbody').value='';}});
+  }
+}
+
+// 分享
+function openShare(){ document.getElementById('sharebg').classList.add('show'); loadShares(); }
+function closeShare(){ document.getElementById('sharebg').classList.remove('show'); }
+function mkShare(){
+  const ttl=document.getElementById('shTtl').value;
+  const label=document.getElementById('shLabel').value;
+  fetch(`/share/${RH}`,{method:'POST',body:new URLSearchParams({ttl:ttl,label:label})})
+    .then(r=>r.json()).then(d=>{ if(d.token){ loadShares(); } });
+}
+function loadShares(){
+  fetch(`/share/${RH}/list`).then(r=>r.json()).then(list=>{
+    const base="{{ urls[0] }}";
+    document.getElementById('shareList').innerHTML = list.map(s=>
+      `<div class="si"><code>${base}/s/${s.token}</code>
+        <span class="tiny">${s.created_h} · ${s.expires_h}</span>
+        <button class="copy" onclick="copy('${base}/s/${s.token}')">复制</button>
+        <button class="copy" style="color:#e74c3c;border-color:#e74c3c" onclick="revokeShare('${s.token}')">吊销</button>
+      </div>`).join('') || '<div class="muted tiny">还没有分享链接</div>';
+  });
+}
+function revokeShare(token){
+  if(!confirm('吊销此分享链接？'))return;
+  fetch(`/share/${RH}/revoke`,{method:'POST',body:new URLSearchParams({token:token})}).then(()=>loadShares());
+}
+
+// 工具
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function getCookie(k){const m=document.cookie.match(new RegExp('(^| )'+k+'=([^;]+)'));return m?decodeURIComponent(m[2]):'';}
+function justNow(){const d=new Date();return (d.getMonth()+1+'').padStart(2,'0')+'-'+(d.getDate()+'').padStart(2,'0')+' '+d.toTimeString().slice(0,5);}
+function fmtSize(n){for(const u of['B','KB','MB','GB']){if(n<1024)return n.toFixed(1)+u;n/=1024;}return n.toFixed(1)+'TB';}
+function copy(t){navigator.clipboard.writeText(t).then(()=>{event.target.textContent='已复制✓';setTimeout(()=>event.target.textContent='复制',1200);});}
+
+renderFiles(); loadMsgs(); connectWs();
+</script>
+</body>
+</html>

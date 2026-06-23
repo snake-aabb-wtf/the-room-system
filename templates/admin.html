@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>管理后台 · The Room</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
+.stat .v{font-size:26px;font-weight:700;color:#fff}
+.stat .k{font-size:12px;color:var(--txt2);margin-top:2px}
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th,.tbl td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+.tbl th{color:var(--txt2);font-weight:500;font-size:12px}
+.tbl tr:hover td{background:var(--bg2)}
+.tag{font-size:10px;padding:1px 6px;border-radius:4px;background:#2a2a3d;color:var(--accent)}
+.tag.preset{background:#3a2e1a;color:var(--warn)}
+.tblwrap{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:8px 4px;overflow:auto;margin-bottom:20px}
+.section-h{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.section-h h2{font-size:15px;color:#fff}
+.section-h .spacer{flex:1}
+.audit-body{color:var(--txt)}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="title">🛠️ 管理后台</div>
+  <div class="sub">The Room System</div>
+  <div class="spacer"></div>
+  <a href="/" class="exit">返回首页</a>
+</div>
+
+<!-- 未登录 -->
+<div class="wrap narrow" id="loginPane" style="display:{% if logged %}none{% endif %}">
+  <div class="login-box">
+    <h1>🔒 管理员登录</h1>
+    <div class="lead">首次启动控制台会打印随机口令，亦可改 config.toml [admin] password</div>
+    <div class="err" id="err" style="display:none">口令错误</div>
+    <input type="password" id="pw" placeholder="管理员口令" onkeydown="if(event.key==='Enter')login()" autofocus>
+    <button class="btn" style="width:100%" onclick="login()">登录</button>
+  </div>
+</div>
+
+<!-- 已登录：仪表盘 -->
+<div class="wrap" id="dashPane" style="display:{% if not logged %}none{% endif %}">
+  <div id="dash"><div class="empty"><div class="big">⏳</div>加载中…</div></div>
+</div>
+
+<script>
+function login(){
+  const pw=document.getElementById('pw').value;
+  fetch('/admin/auth',{method:'POST',body:new URLSearchParams({password:pw})})
+    .then(r=>{if(r.ok){location.reload();}else{document.getElementById('err').style.display='block';}});
+}
+
+{% if logged %}
+async function json(url){const r=await fetch(url); if(!r.ok) throw new Error(r.status); return r.json();}
+async function loadDash(){
+  try{
+    const [stats,rooms,audit] = await Promise.all([
+      json('/admin/api/stats'), json('/admin/api/rooms'), json('/admin/api/audit?limit=100')
+    ]);
+    renderStats(stats);
+    renderRooms(rooms);
+    renderAudit(audit);
+  }catch(e){
+    document.getElementById('dash').innerHTML='<div class="empty"><div class="big">⚠️</div>加载失败：'+e+'</div>';
+  }
+}
+function renderStats(s){
+  const cards=[
+    ['🏠',s.rooms,'房间数'],
+    ['📄',s.files,'文件数'],
+    ['💾',s.total_size_h,'总占用'],
+    ['⬇️',s.downloads,'总下载'],
+    ['💬',s.messages,'留言数'],
+    ['📋',s.audit_events,'审计事件'],
+  ];
+  document.getElementById('stats').innerHTML = cards.map(c=>
+    `<div class="stat"><div class="v">${c[1]}</div><div class="k">${c[0]} ${c[2]}</div></div>`).join('');
+}
+function renderRooms(rooms){
+  const tb=document.getElementById('roomsBody');
+  if(!rooms.length){tb.innerHTML='<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">暂无房间</td></tr>';return;}
+  tb.innerHTML=rooms.map(r=>
+    `<tr>
+      <td><code>${r.room_hash.slice(0,10)}</code></td>
+      <td>${r.name?`<span class="tag preset">${esc(r.name)}</span>`:'<span class="tag">临时</span>'}</td>
+      <td>${r.fcnt}</td>
+      <td>${r.fsize_h}</td>
+      <td>${r.last_h}</td>
+      <td><button class="btn small ghost" style="color:#e74c3c;border-color:#e74c3c" onclick="nuke('${r.room_hash}')">清空</button></td>
+    </tr>`).join('');
+}
+function renderAudit(audit){
+  const tb=document.getElementById('auditBody');
+  if(!audit.length){tb.innerHTML='<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">暂无记录</td></tr>';return;}
+  tb.innerHTML=audit.map(a=>
+    `<tr>
+      <td class="tiny">${a.ts_h}</td>
+      <td><code>${(a.room_hash||'-').slice(0,8)}</code></td>
+      <td class="tiny">${esc(a.client_ip||'-')}</td>
+      <td><span class="tag">${esc(a.action)}</span></td>
+      <td class="audit-body tiny">${esc(a.detail||'')}</td>
+    </tr>`).join('');
+}
+function cleanupNow(){
+  if(!confirm('立即扫描并删除所有已到期文件？'))return;
+  fetch('/admin/api/cleanup',{method:'POST'}).then(r=>r.json()).then(d=>{
+    alert('已清理 '+d.removed+' 个过期文件'); loadDash();
+  });
+}
+function nuke(rh){
+  if(!confirm('物理清空此房间所有文件？不可恢复！'))return;
+  if(!confirm('再次确认：这会永久删除该房间的全部文件。'))return;
+  fetch(`/admin/api/room/${rh}/nuke`,{method:'POST'}).then(r=>r.json()).then(d=>{
+    alert('已删除 '+d.removed+' 个文件'); loadDash();
+  });
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+// 预置骨架后立即填充
+document.getElementById('dash').innerHTML=`
+  <div class="stat-grid" id="stats"></div>
+  <div class="section-h"><h2>🏠 房间列表</h2><div class="spacer"></div>
+    <button class="btn small ghost" onclick="loadDash()">刷新</button>
+    <button class="btn small ghost" onclick="cleanupNow()">🧹 清理过期</button>
+  </div>
+  <div class="tblwrap"><table class="tbl">
+    <thead><tr><th>房间</th><th>类型</th><th>文件</th><th>占用</th><th>最后活跃</th><th>操作</th></tr></thead>
+    <tbody id="roomsBody"></tbody>
+  </table></div>
+  <div class="section-h"><h2>📋 审计日志（最近 100 条）</h2></div>
+  <div class="tblwrap"><table class="tbl">
+    <thead><tr><th>时间</th><th>房间</th><th>IP</th><th>动作</th><th>详情</th></tr></thead>
+    <tbody id="auditBody"></tbody>
+  </table></div>`;
+loadDash();
+setInterval(loadDash, 15000);
+{% endif %}
+</script>
+</body>
+</html>

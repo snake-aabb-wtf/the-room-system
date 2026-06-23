@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>文件传输 · 登录</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap narrow" style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px">
+  <div class="login-box" style="width:100%">
+    <h1>📁 文件传输</h1>
+    <div class="lead">输入口令进入房间，或创建一个新房间</div>
+    <div class="err" id="err">口令不能为空 / 已创建</div>
+    <input type="password" id="pw" placeholder="输入口令" autofocus
+           onkeydown="if(event.key==='Enter')go()">
+    <button class="btn" style="width:100%" onclick="go()">→ 进入房间</button>
+    <button class="btn sec" style="width:100%;margin-top:10px" onclick="createRoom()">✨ 随机创建一个房间</button>
+
+    {% if urls %}
+    <div class="urls">
+      <div class="muted tiny" style="margin-bottom:8px">本机可访问地址（直接复制给对方）</div>
+      {% for u in urls %}
+      <div class="url">
+        <span>{{ u }}</span>
+        <button class="copy" onclick="copy('{{ u }}')">复制</button>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+<script>
+function go(){
+  var pw=document.getElementById('pw').value.trim();
+  if(!pw){document.getElementById('err').style.display='block';return;}
+  fetch('/auth',{method:'POST',body:new URLSearchParams({password:pw})})
+    .then(function(r){return r.json();})
+    .then(function(d){ if(d.ok){window.location.href='/room';} })
+    .catch(function(){document.getElementById('err').style.display='block';});
+}
+function createRoom(){
+  var pw=Math.random().toString(36).slice(2,10)+Math.random().toString(36).slice(2,6);
+  fetch('/auth',{method:'POST',body:new URLSearchParams({password:pw})})
+    .then(function(r){return r.json();})
+    .then(function(d){ if(d.ok){window.location.href='/room';} });
+}
+function copy(t){
+  navigator.clipboard.writeText(t).then(function(){
+    event.target.textContent='已复制✓';setTimeout(function(){event.target.textContent='复制';},1200);
+  });
+}
+</script>
+</body>
+</html>

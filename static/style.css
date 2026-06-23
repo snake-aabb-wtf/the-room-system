@@ -1,0 +1,134 @@
+/* The Room System 全局样式 —— 暗色现代主题 */
+:root{
+  --bg:#0f0f12; --bg2:#16161f; --card:#1a1a26; --card2:#20202e;
+  --border:#2a2a3d; --border-hi:#3a3a52;
+  --txt:#e6e6f0; --txt2:#9a9ab0; --txt3:#666680;
+  --accent:#4ec9b0; --accent2:#0d7377; --accent-d:#0a8a8f;
+  --warn:#f1c40f; --danger:#e74c3c; --info:#5b8def;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--txt);line-height:1.5;-webkit-font-smoothing:antialiased;
+}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:"Cascadia Code",Consolas,monospace}
+button{font-family:inherit;cursor:pointer}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#2e2e42;border-radius:5px}
+::-webkit-scrollbar-thumb:hover{background:#3e3e58}
+::-webkit-scrollbar-track{background:transparent}
+
+/* 通用按钮 */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border:none;border-radius:8px;
+  font-size:14px;font-weight:500;color:#fff;background:var(--accent2);transition:.15s;white-space:nowrap}
+.btn:hover{background:var(--accent-d);text-decoration:none}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.sec{background:var(--card2);color:var(--txt2);border:1px solid var(--border)}
+.btn.sec:hover{background:var(--border-hi);color:var(--txt)}
+.btn.ghost{background:transparent;color:var(--txt2);border:1px solid var(--border)}
+.btn.danger{background:var(--danger)}
+.btn.small{padding:5px 11px;font-size:12px;border-radius:6px}
+input,textarea,select{font-family:inherit;font-size:14px;background:var(--bg);color:var(--txt);
+  border:1px solid var(--border);border-radius:8px;padding:10px 12px;outline:none;transition:.15s}
+input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+
+/* 卡片 */
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px}
+.muted{color:var(--txt2)}
+.tiny{font-size:11px;color:var(--txt3)}
+
+/* 顶栏 */
+.topbar{background:linear-gradient(135deg,#161624,#1a1a2e);border-bottom:1px solid var(--border);
+  padding:14px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;position:sticky;top:0;z-index:20}
+.topbar .title{font-size:17px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
+.topbar .sub{font-size:12px;color:var(--txt3)}
+.topbar .spacer{flex:1}
+.topbar a.exit{color:var(--txt2);font-size:13px}
+
+/* 布局容器 */
+.wrap{max-width:1100px;margin:0 auto;padding:20px}
+.wrap.narrow{max-width:440px}
+
+/* ── 登录页 ── */
+.login-box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:34px 32px;
+  box-shadow:0 10px 40px rgba(0,0,0,.4)}
+.login-box h1{font-size:22px;color:#fff;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.login-box .lead{font-size:13px;color:var(--txt2);margin-bottom:24px}
+.login-box input{width:100%;margin-bottom:14px}
+.err{color:var(--danger);font-size:12px;margin-bottom:12px;display:none}
+.urls{margin-top:22px;padding-top:18px;border-top:1px solid var(--border)}
+.urls .url{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);border-radius:8px;
+  margin-bottom:6px;font-size:13px;flex-wrap:wrap}
+.urls .url code{color:var(--accent);font-size:13px}
+.copy{margin-left:auto;background:var(--card2);border:1px solid var(--border);color:var(--txt2);
+  padding:3px 9px;border-radius:6px;font-size:11px;cursor:pointer}
+.copy:hover{color:var(--accent);border-color:var(--accent)}
+
+/* ── 房间页 ── */
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.toolbar .grow{flex:1;min-width:140px}
+.search{position:relative;flex:1;min-width:160px}
+.search input{width:100%;padding-left:34px}
+.search .ico{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--txt3)}
+.dropzone{border:2px dashed var(--border);border-radius:12px;padding:26px;text-align:center;
+  color:var(--txt2);transition:.2s;margin-bottom:18px;cursor:pointer}
+.dropzone:hover,.dropzone.drag{border-color:var(--accent);background:rgba(78,201,176,.05);color:var(--txt)}
+.dropzone .big{font-size:30px;margin-bottom:6px}
+.upload-queue{margin-bottom:16px;display:flex;flex-direction:column;gap:8px}
+.uq-item{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.uq-item .uq-name{font-size:13px;display:flex;justify-content:space-between;gap:8px}
+.bar{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:6px}
+.bar > i{display:block;height:100%;background:var(--accent);width:0;transition:width .15s}
+.bar.err > i{background:var(--danger)}
+.bar.ok > i{background:#2ecc71}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.fcard{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;
+  display:flex;flex-direction:column;gap:8px;transition:.15s}
+.fcard:hover{border-color:var(--accent);transform:translateY(-1px)}
+.fcard .ficon{font-size:28px;line-height:1}
+.fcard .fname{font-size:13px;font-weight:600;color:#fff;word-break:break-all}
+.fcard .fmeta{font-size:11px;color:var(--txt3);display:flex;gap:8px;flex-wrap:wrap}
+.fcard .facts{display:flex;gap:6px;margin-top:auto}
+.empty{text-align:center;color:var(--txt3);padding:70px 20px;font-size:14px}
+.empty .big{font-size:46px;margin-bottom:10px}
+
+/* 信息条 */
+.infobar{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:16px}
+.infobar .row{display:flex;align-items:center;gap:8px;font-size:13px;margin:4px 0;flex-wrap:wrap}
+.infobar .lbl{color:var(--txt3);min-width:78px}
+.infobar code{color:var(--accent)}
+.pw-chip{color:var(--warn);font-size:15px;font-weight:600;font-family:"Cascadia Code",Consolas,monospace}
+
+/* 二维码弹层 */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+.modal-bg.show{display:flex}
+.modal{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px;max-width:340px;width:92%}
+.modal h3{margin-bottom:14px;color:#fff}
+.modal .qr{background:#fff;padding:12px;border-radius:8px;display:flex;justify-content:center;margin-bottom:12px}
+.modal .close{margin-top:8px;width:100%}
+
+/* 预览灯箱 */
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:60;padding:30px}
+.lightbox.show{display:flex}
+.lightbox .lb-inner{max-width:92vw;max-height:90vh;display:flex;flex-direction:column;align-items:center;gap:14px}
+.lightbox img{max-width:90vw;max-height:80vh;border-radius:8px}
+.lightbox video{max-width:90vw;max-height:80vh;background:#000;border-radius:8px}
+.lightbox .lb-close{position:fixed;top:18px;right:24px;font-size:30px;color:#fff;cursor:pointer;background:none;border:none}
+
+/* 房间留言区 */
+.chat{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:20px}
+.chat .msgs{max-height:240px;overflow:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:10px;padding-right:4px}
+.chat .msg{font-size:13px}.chat .msg .who{color:var(--accent);font-weight:600}
+.chat .msg .when{color:var(--txt3);font-size:11px;margin-left:6px}
+.chat form{display:flex;gap:8px}
+.chat input{flex:1}
+
+@media(max-width:640px){
+  .wrap{padding:14px}
+  .grid{grid-template-columns:1fr}
+  .topbar{padding:12px 14px}
+}
