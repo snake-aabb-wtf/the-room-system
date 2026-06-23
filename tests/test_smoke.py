@@ -1,0 +1,289 @@
+"""端到端冒烟测试：自启服务 → 全流程验证 → 清理。
+
+可独立运行：python tests/test_smoke.py
+无需预启动任何服务，脚本会用临时目录 + 随机端口自起一个实例。
+
+覆盖项：
+  登录 · 进房间 · 上传(ASCII/中文) · 文件列表 · 下载(全量+Range)
+  路径穿越拦截 · 未授权拦截 · Markdown 渲染 · 文本预览
+  分享链接(创建/列表/吊销/落地页) · 到期上传 · 留言
+  管理员(登录/统计/房间/审计/未授权拦截) · 过期清理
+  WebSocket 实时双向广播 + 鉴权
+"""
+from __future__ import annotations
+import hashlib
+import http.client
+import json
+import os
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+# ── 测试用固定口令 ──────────────────────────────
+PW = "ci_smoke_pw_zZ99"
+ADMIN_PW = "ci_admin_pw_777"
+BASE = Path(__file__).resolve().parent.parent
+
+_passed = 0
+_failed = 0
+
+
+def ok(name: str, detail: str = "") -> None:
+    global _passed
+    _passed += 1
+    print(f"  [PASS] {name}{(' — ' + detail) if detail else ''}")
+
+
+def fail(name: str, err: str) -> None:
+    global _failed
+    _failed += 1
+    print(f"  [FAIL] {name} — {err}")
+
+
+def check(name: str, cond: bool, detail: str = "") -> None:
+    (ok if cond else fail)(name, detail if not cond else detail)
+
+
+def free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def rh() -> str:
+    return hashlib.sha256(PW.encode()).hexdigest()[:16]
+
+
+# ── HTTP 工具 ──────────────────────────────────
+def req(host, port, method, path, headers=None, body=None, timeout=10):
+    c = http.client.HTTPConnection(host, port, timeout=timeout)
+    c.request(method, path, body=body, headers=headers or {})
+    r = c.getresponse()
+    data = r.read()
+    cookies = r.getheader("set-cookie") or ""
+    c.close()
+    return r.status, data, cookies, dict(r.getheaders())
+
+
+def mp(field, filename, content, ctype="text/plain", boundary="BNDRY"):
+    """构造 multipart body。boundary 不用 - 开头，避免和协议前缀 -- 混淆。"""
+    head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; "
+            f"filename=\"{filename}\"\r\nContent-Type: {ctype}\r\n\r\n").encode()
+    return head + content + f"\r\n--{boundary}--\r\n".encode()
+
+
+def wait_up(host, port, timeout=20):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            s = socket.create_connection((host, port), timeout=1)
+            s.close()
+            return True
+        except OSError:
+            time.sleep(0.3)
+    return False
+
+
+def main():
+    tmp = tempfile.mkdtemp(prefix="room_test_")
+    port = free_port()
+    print(f"\n>>> 启动测试服务: 127.0.0.1:{port}  数据目录: {tmp}")
+
+    env = dict(os.environ)
+    env.update({
+        "ROOM_HOST": "127.0.0.1",
+        "ROOM_PORT": str(port),
+        "ROOM_DATA_DIR": tmp,
+        "ROOM_ADMIN_PW": ADMIN_PW,
+        "PYTHONPATH": str(BASE),
+    })
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import uvicorn; from roomsystem.app import create_app; "
+                               "uvicorn.run(create_app(), host='127.0.0.1', port=%d, log_level='warning')" % port],
+        cwd=str(BASE), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    try:
+        if not wait_up("127.0.0.1", port):
+            err = proc.stderr.read().decode("utf-8", "replace")[:500]
+            print(f"!!! 服务启动失败:\n{err}")
+            return 1
+        run_tests("127.0.0.1", port)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print(f"\n>>> 结果: {_passed} 通过, {_failed} 失败")
+    return 0 if _failed == 0 else 1
+
+
+def run_tests(host, port):
+    print("\n=== 基础流程 ===")
+    s, data, _, _ = req(host, port, "GET", "/")
+    check("首页渲染", s == 200 and b"\xe6\x96\x87\xe4\xbb\xb6\xe4\xbc\xa0\xe8\xbe\x93" in data, str(s))
+
+    s, _, cookies, _ = req(host, port, "POST", "/auth",
+                           {"Content-Type": "application/x-www-form-urlencoded"},
+                           body=f"password={PW}")
+    sess = cookies.split(";")[0]
+    check("登录发 cookie", s == 200 and sess.startswith("room_session="), str(s))
+
+    R = rh()
+    s, data, _, _ = req(host, port, "GET", f"/room/{R}", {"Cookie": sess})
+    check("进入房间页", s == 200 and b"\xe6\x88\xbf\xe9\x97\xb4" in data, str(s))
+
+    print("\n=== 上传 / 下载 / Range ===")
+    b = "BNDRYUA"
+    s, d, _, _ = req(host, port, "POST", f"/upload/{R}",
+                     {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+                     body=mp("file", "ascii.txt", b"hello world", boundary=b))
+    check("上传 ASCII 文件", s == 200 and json.loads(d)["ok"], str(s))
+
+    b = "BNDRYUC"
+    s, d, _, _ = req(host, port, "POST", f"/upload/{R}",
+                     {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+                     body=mp("file", "\u6d4b\u8bd5.txt", b"ni hao", boundary=b))  # 测试.txt
+    up = json.loads(d)
+    check("上传中文文件名", s == 200 and up["ok"] and up["name"] == "\u6d4b\u8bd5.txt", str(s))
+
+    s, data, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    files = json.loads(data)
+    check("文件列表", s == 200 and any(f["name"] == "\u6d4b\u8bd5.txt" for f in files), str(s))
+
+    # 全量下载 + Range 文件
+    b = "BNDRYUR"
+    content = b"0123456789" * 10
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+        body=mp("file", "range.bin", content, boundary=b))
+    s, data, _, h = req(host, port, "GET", f"/dl/{R}/range.bin", {"Cookie": sess, "Range": "bytes=5-9"})
+    check("Range 部分内容(206)", s == 206 and data == content[5:10], f"{s} {data!r}")
+    cr = h.get("Content-Range") or h.get("content-range") or ""
+    check("Content-Range 头正确", cr == "bytes 5-9/100", cr)
+    ar = (h.get("Accept-Ranges") or h.get("accept-ranges") or "").lower()
+    check("Accept-Ranges 支持", ar == "bytes", ar)
+
+    print("\n=== 安全拦截 ===")
+    s, _, _, _ = req(host, port, "GET", f"/dl/{R}/..%2f..%2fconfig.toml", {"Cookie": sess})
+    check("路径穿越被拦", s in (400, 404, 422), str(s))
+
+    s, _, _, _ = req(host, port, "GET", f"/api/{R}/files")  # 无 cookie
+    check("未授权访问被拦(403)", s == 403, str(s))
+
+    print("\n=== 预览渲染 (Phase 3) ===")
+    md = b"# Title\n\n**bold**\n\n- a\n- b\n\n> quote\n\n`code`"
+    b = "BNDRYMD"
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+        body=mp("file", "doc.md", md, "text/markdown", b))
+    s, d, _, _ = req(host, port, "GET", f"/view/{R}/md/doc.md", {"Cookie": sess})
+    html = json.loads(d)["html"]
+    check("Markdown 渲染", s == 200 and "<h1>" in html and "<strong>bold</strong>" in html, html[:80])
+
+    b = "BNDRYPY"
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+        body=mp("file", "code.py", b"def f():\n    pass", "text/x-python", b))
+    s, d, _, _ = req(host, port, "GET", f"/view/{R}/text/code.py", {"Cookie": sess})
+    txt = json.loads(d)
+    check("文本/代码预览", s == 200 and "def f" in txt["text"] and txt["ext"] == "py", str(s))
+
+    print("\n=== 分享链接 (Phase 5) ===")
+    s, d, _, _ = req(host, port, "POST", f"/share/{R}",
+                     {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
+                     body="ttl=24&label=test")
+    sh = json.loads(d)
+    check("创建分享链接", s == 200 and sh["token"], str(s))
+
+    s, d, _, _ = req(host, port, "GET", f"/share/{R}/list", {"Cookie": sess})
+    check("分享列表", s == 200 and any(x["token"] == sh["token"] for x in json.loads(d)), str(s))
+
+    s, d, _, _ = req(host, port, "GET", f"/s/{sh['token']}")
+    check("分享落地页(有效)", s == 200 and "\u6709\u6548" in d.decode("utf-8"), str(s))
+
+    req(host, port, "POST", f"/share/{R}/revoke",
+        {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
+        body=f"token={sh['token']}")
+    s, d, _, _ = req(host, port, "GET", f"/s/{sh['token']}")
+    check("吊销后落地页失效", "\u5931\u6548" in d.decode("utf-8"), str(s))
+
+    s, d, _, _ = req(host, port, "GET", "/s/bad_token_xxx")
+    check("无效 token 被拦", "\u5931\u6548" in d.decode("utf-8"), str(s))
+
+    # 到期文件上传
+    b = "BNDRYEX"
+    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"t.tmp\"\r\n\r\n"
+            f"x\r\n--{b}\r\nContent-Disposition: form-data; name=\"ttl\"\r\n\r\n1\r\n--{b}--\r\n").encode()
+    s, d, _, _ = req(host, port, "POST", f"/upload/{R}",
+                     {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"}, body=body)
+    check("到期文件上传", s == 200 and json.loads(d)["ok"], str(s))
+
+    print("\n=== 留言 ===")
+    s, d, _, _ = req(host, port, "POST", f"/api/{R}/messages",
+                     {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
+                     body="body=hello+smoke")
+    check("发送留言", s == 200 and json.loads(d)["ok"], str(s))
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/messages", {"Cookie": sess})
+    msgs = json.loads(d)
+    check("读取留言", any(m["body"] == "hello smoke" for m in msgs), str(len(msgs)))
+
+    print("\n=== 管理后台 (Phase 4) ===")
+    s, _, acookies, _ = req(host, port, "POST", "/admin/auth",
+                            {"Content-Type": "application/x-www-form-urlencoded"},
+                            body=f"password={ADMIN_PW}")
+    asess = acookies.split(";")[0]
+    check("管理员登录", s == 200 and asess.startswith("room_admin="), str(s))
+
+    s, d, _, _ = req(host, port, "GET", "/admin/api/stats", {"Cookie": asess})
+    st = json.loads(d)
+    check("统计 API", s == 200 and st["rooms"] >= 1 and st["files"] >= 2, str(st))
+
+    s, d, _, _ = req(host, port, "GET", "/admin/api/rooms", {"Cookie": asess})
+    check("房间列表 API", s == 200 and any(r["room_hash"] == R for r in json.loads(d)), str(s))
+
+    s, d, _, _ = req(host, port, "GET", "/admin/api/audit?limit=10", {"Cookie": asess})
+    check("审计日志 API", s == 200 and len(json.loads(d)) > 0, str(s))
+
+    s, _, _, _ = req(host, port, "GET", "/admin/api/stats")  # 无 cookie
+    check("管理员未授权被拦(403)", s == 403, str(s))
+
+    s, d, _, _ = req(host, port, "POST", "/admin/api/cleanup", {"Cookie": asess})
+    check("过期清理 API", s == 200 and json.loads(d)["ok"], str(s))
+
+    print("\n=== WebSocket 实时 (Phase 5) ===")
+    try:
+        import websockets
+        import asyncio
+
+        async def ws_test():
+            uri = f"ws://{host}:{port}/ws/{R}"
+            async with websockets.connect(uri, additional_headers={"Cookie": sess}) as ws:
+                await ws.send(json.dumps({"kind": "message", "body": "ws-broadcast"}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                m = json.loads(raw)
+                check("WS 发送→广播", m.get("type") == "message" and m.get("body") == "ws-broadcast", str(m))
+            # 未授权连接应被拒
+            try:
+                async with websockets.connect(uri, additional_headers={}) as ws:
+                    await ws.recv()
+                fail("WS 鉴权", "未授权连接竟然成功了")
+            except Exception:
+                check("WS 未授权被拒", True)
+
+        asyncio.run(ws_test())
+    except ImportError:
+        check("WebSocket 测试", False, "websockets 库未安装，跳过")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

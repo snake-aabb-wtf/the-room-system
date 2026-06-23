@@ -9,6 +9,9 @@ No accounts · No cloud · No size limits · Just a password and a browser.
 
 🌐 Other languages: [简体中文](README.md)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/snake-aabb-wtf/the-room-system/actions/workflows/ci.yml/badge.svg)](https://github.com/snake-aabb-wtf/the-room-system/actions/workflows/ci.yml)
+
 ---
 
 </div>

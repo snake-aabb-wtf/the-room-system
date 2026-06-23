@@ -5,7 +5,7 @@ import re
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Request, Response, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, Response, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
 
 from . import store, auth, realtime
@@ -179,12 +179,9 @@ def api_files(rh: str, request: Request):
 
 
 @router.post("/upload/{rh}")
-async def upload(rh: str, request: Request, file: UploadFile = File(...)):
+async def upload(rh: str, request: Request, file: UploadFile = File(...), ttl: str = Form(default="")):
     if current_room(request) != rh:
         raise HTTPException(403)
-    # 可选到期时间（小时）；表单字段 ttl，0/空=永久
-    form = await request.form()
-    ttl = form.get("ttl", "")
     expires_at = _ttl_to_ts(ttl)
     safe = clean_name(file.filename or "unnamed")
     ext = _ext(safe)

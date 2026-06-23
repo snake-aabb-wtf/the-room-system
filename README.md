@@ -9,6 +9,9 @@
 
 🌐 其他语言：[English](README_en_US.md)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/snake-aabb-wtf/the-room-system/actions/workflows/ci.yml/badge.svg)](https://github.com/snake-aabb-wtf/the-room-system/actions/workflows/ci.yml)
+
 ---
 
 </div>

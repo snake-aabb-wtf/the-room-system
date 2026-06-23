@@ -1,12 +1,23 @@
-"""配置加载：读 config.toml，缺省全部有兜底。删了配置文件也能跑。"""
+"""配置加载：读 config.toml，缺省全部有兜底。删了配置文件也能跑。
+
+环境变量覆盖（便于测试 / CI / 容器）：
+  ROOM_HOST      覆盖 host
+  ROOM_PORT      覆盖 port
+  ROOM_DATA_DIR  覆盖数据目录（DB + 文件都放这）
+  ROOM_ADMIN_PW  覆盖管理员口令
+"""
 from __future__ import annotations
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 CONFIG_PATH = BASE / "config.toml"
-DATA_DIR = BASE / "data"
+
+# 数据目录：默认 ./data，可被 ROOM_DATA_DIR 覆盖（CI / 测试用临时目录）
+_env_data = os.environ.get("ROOM_DATA_DIR")
+DATA_DIR = Path(_env_data).resolve() if _env_data else BASE / "data"
 FILES_DIR = DATA_DIR / "files"
 DB_PATH = DATA_DIR / "rooms.db"
 
@@ -42,6 +53,13 @@ def load() -> Config:
             cfg.admin_password = ad["password"]
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     FILES_DIR.mkdir(parents=True, exist_ok=True)
+    # 环境变量覆盖（优先级最高）
+    if os.environ.get("ROOM_HOST"):
+        cfg.host = os.environ["ROOM_HOST"]
+    if os.environ.get("ROOM_PORT"):
+        cfg.port = int(os.environ["ROOM_PORT"])
+    if os.environ.get("ROOM_ADMIN_PW"):
+        cfg.admin_password = os.environ["ROOM_ADMIN_PW"]
     return cfg
 
 
