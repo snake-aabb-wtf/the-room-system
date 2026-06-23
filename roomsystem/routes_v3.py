@@ -205,6 +205,14 @@ async def batch_delete(rh: str, req: IdsBody, request: Request):
 async def batch_restore(rh: str, req: IdsBody, request: Request):
     auth_layer(request, need="user", room=rh)
     n, failed = store.restore_files_batch(req.ids, rh)
+    # 触发 webhooks (取回原名列表)
+    for fid in req.ids:
+        f = store.get_file_by_id(fid)
+        if f and f["room_hash"] == rh:
+            try:
+                await fire_event("file.restored", rh, {"name": f["name"]})
+            except Exception:
+                pass
     return {"ok": True, "restored": n, "failed": failed}
 
 
@@ -212,6 +220,13 @@ async def batch_restore(rh: str, req: IdsBody, request: Request):
 async def batch_purge(rh: str, req: IdsBody, request: Request):
     auth_layer(request, need="user", room=rh)
     n, failed = store.purge_files_batch(req.ids, rh)
+    for fid in req.ids:
+        f = store.get_file_by_id(fid)  # 已被删，返回 None
+        # 永久删时 file 已 delete，无 from record
+        try:
+            await fire_event("file.purged", rh, {"id": fid})
+        except Exception:
+            pass
     return {"ok": True, "purged": n, "failed": failed}
 
 
@@ -335,6 +350,151 @@ def admin_cleanup_v3(request: Request):
     auth_layer(request, need="admin")
     n = store.purge_expired()
     return {"ok": True, "removed": n}
+
+
+# ── v3.0.0-rc.4: WebHook 系统 ───────────────────
+import hashlib
+import hmac as _hmac
+import httpx  # uvicorn[standard] 带的 httpx 用于出站调用
+from pydantic import BaseModel, Field as _Field
+
+
+class WebhookCreate(BaseModel):
+    name: str = _Field(..., min_length=1, max_length=64)
+    url: str = _Field(..., min_length=8, max_length=512)
+    secret: str = _Field(..., min_length=4, max_length=128,
+                        description="用户自己设的 secret, 签名时用 HMAC-SHA256")
+    events: str = _Field("file.uploaded,file.deleted,file.restored,file.purged",
+                        description="逗号分隔的事件名")
+    room_hash: Opt[str] = None
+
+
+class WebhookPatch(BaseModel):
+    name: Opt[str] = None
+    url: Opt[str] = None
+    secret: Opt[str] = None
+    events: Opt[str] = None
+    active: Opt[int] = None
+
+
+@router.get("/admin/webhooks")
+def admin_list_webhooks(request: Request, room_hash: str = ""):
+    auth_layer(request, need="admin")
+    hooks = store.list_webhooks(room_hash or None)
+    # 不返回 secret（安全）
+    for h in hooks:
+        h.pop("secret", None)
+        if h.get("created_at"):
+            h["created_h"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(h["created_at"]))
+        if h.get("last_fired_at"):
+            h["last_fired_h"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(h["last_fired_at"]))
+    return {"items": hooks}
+
+
+@router.post("/admin/webhooks", status_code=201)
+def admin_create_webhook(req: WebhookCreate, request: Request):
+    auth_layer(request, need="admin")
+    if req.room_hash and not store.room_exists(req.room_hash):
+        return not_found("room not found")
+    # 简单 URL 校验
+    if not (req.url.startswith("http://") or req.url.startswith("https://")):
+        return bad_request("url must start with http:// or https://")
+    rec = store.create_webhook(
+        name=req.name, url=req.url, secret=req.secret,
+        events=req.events, room_hash=req.room_hash,
+    )
+    rec.pop("secret", None)
+    return rec
+
+
+@router.get("/admin/webhooks/{wid}")
+def admin_get_webhook(wid: int, request: Request):
+    auth_layer(request, need="admin")
+    h = store.get_webhook(wid)
+    if not h: return not_found("webhook not found")
+    h.pop("secret", None)
+    if h.get("created_at"):
+        h["created_h"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(h["created_at"]))
+    return h
+
+
+@router.patch("/admin/webhooks/{wid}")
+def admin_patch_webhook(wid: int, req: WebhookPatch, request: Request):
+    auth_layer(request, need="admin")
+    if not store.get_webhook(wid):
+        return not_found("webhook not found")
+    ok = store.update_webhook(wid, name=req.name, url=req.url,
+                              secret=req.secret, events=req.events, active=req.active)
+    return {"ok": ok}
+
+
+@router.delete("/admin/webhooks/{wid}", status_code=204)
+def admin_delete_webhook(wid: int, request: Request):
+    auth_layer(request, need="admin")
+    if not store.delete_webhook(wid):
+        return not_found("webhook not found")
+    return {"ok": True}
+
+
+@router.get("/admin/webhooks/{wid}/deliveries")
+def admin_list_deliveries(wid: int, request: Request, limit: int = 50):
+    auth_layer(request, need="admin")
+    return {"items": store.list_webhook_deliveries(wid, limit=limit)}
+
+
+# ── 事件触发器：被各种写入操作调用 ──
+async def fire_event(event: str, room_hash: str, payload: dict) -> None:
+    """异步触发：所有活跃且订阅该事件的 webhook 都会收到 POST。
+    签名: HMAC-SHA256(secret, timestamp + '.' + body)
+    Header: X-Room-Signature-256: t=<ts>,v1=<sig>
+    """
+    import json as _json
+    import asyncio as _asyncio
+    # 找订阅
+    hooks = store.list_webhooks(room_hash)
+    targets = [h for h in hooks
+               if h.get("active") and event in (h.get("events") or "").split(",")]
+    if not targets:
+        return
+    body_bytes = _json.dumps({"event": event, "room": room_hash, **payload},
+                             ensure_ascii=False).encode("utf-8")
+    # 异步投递
+    _asyncio.create_task(_deliver_all(targets, event, body_bytes))
+
+
+async def _deliver_all(hooks, event, body_bytes):
+    """对每个 hook 并发 POST 一次。"""
+    import asyncio as _asyncio
+    import json as _json
+    ts = int(time.time())
+    async with httpx.AsyncClient(timeout=10) as client:
+        for h in hooks:
+            wid = h["id"]
+            secret = h.get("secret", "").encode()
+            msg = f"{ts}.".encode() + body_bytes
+            sig = _hmac.new(secret, msg, hashlib.sha256).hexdigest()
+            try:
+                r = await client.post(
+                    h["url"],
+                    content=body_bytes,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Room-Signature-256": f"t={ts},v1={sig}",
+                        "X-Room-Event": event,
+                    },
+                )
+                store.record_webhook_delivery(wid, event, r.status_code, r.text[:200])
+                store.touch_webhook_fired(wid, ok=(200 <= r.status_code < 300))
+            except Exception as e:
+                store.record_webhook_delivery(wid, event, None, str(e)[:200])
+                store.touch_webhook_fired(wid, ok=False)
+
+
+# ── 在上传/删除/恢复/永久删时触发事件 ──
+# 集成点：把原 upload / delete / batch-* 路由的 broadcast 旁加 fire_event
+# 为最小侵入，新加 hook 包装。直接修改现有路由工作量大，改在 routes.py 关键点调 fire_event。
+# 这里仅暴露 fire_event，调用方集成。
+# 实际：已通过 realtime.broadcast 推 WS。fire_event 是另一通道，外部可订阅。
 
 
 # ── v3.0.0-rc.3: 预签名 URL（HMAC 短时下载/上传）──

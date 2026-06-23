@@ -739,3 +739,91 @@ def update_api_token(token_id: int, name: str | None = None,
         cur = c.execute(f"UPDATE api_tokens SET {','.join(sets)} WHERE id=?", args)
         return cur.rowcount > 0
 
+
+# ── v3.0.0-rc.4: WebHook 系统 ───────────────────
+def create_webhook(name: str, url: str, secret: str, events: str,
+                   room_hash: str | None = None) -> dict:
+    """创建 webhook。events 逗号分隔如 'file.uploaded,file.deleted'。"""
+    now = time.time()
+    with _conn() as c:
+        cur = c.execute(
+            """INSERT INTO webhooks(name,url,secret,events,room_hash,active,created_at,last_fired_at,fail_count)
+               VALUES(?,?,?,?,?,1,?,NULL,0)""",
+            (name, url, secret, events, room_hash, now),
+        )
+        wid = cur.lastrowid
+    return {"id": wid, "name": name, "url": url, "events": events,
+            "room_hash": room_hash, "active": 1, "created_at": now, "fail_count": 0}
+
+
+def list_webhooks(room_hash: str | None = None) -> list[dict]:
+    with _conn() as c:
+        if room_hash:
+            rows = c.execute(
+                "SELECT * FROM webhooks WHERE room_hash IS NULL OR room_hash=? ORDER BY created_at DESC",
+                (room_hash,),
+            ).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM webhooks ORDER BY created_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_webhook(wid: int) -> dict | None:
+    with _conn() as c:
+        r = c.execute("SELECT * FROM webhooks WHERE id=?", (wid,)).fetchone()
+        return dict(r) if r else None
+
+
+def update_webhook(wid: int, name: str | None = None, url: str | None = None,
+                   secret: str | None = None, events: str | None = None,
+                   active: int | None = None) -> bool:
+    sets, args = [], []
+    for col, val in (("name", name), ("url", url), ("secret", secret),
+                      ("events", events), ("active", active)):
+        if val is not None:
+            sets.append(f"{col}=?"); args.append(val)
+    if not sets: return False
+    args.append(wid)
+    with _conn() as c:
+        cur = c.execute(f"UPDATE webhooks SET {','.join(sets)} WHERE id=?", args)
+        return cur.rowcount > 0
+
+
+def delete_webhook(wid: int) -> bool:
+    with _conn() as c:
+        cur = c.execute("DELETE FROM webhooks WHERE id=?", (wid,))
+        c.execute("DELETE FROM webhook_deliveries WHERE webhook_id=?", (wid,))
+        return cur.rowcount > 0
+
+
+def record_webhook_delivery(webhook_id: int, event: str, status_code: int | None,
+                            response_body: str = "") -> None:
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO webhook_deliveries(webhook_id,event,status_code,response_body,ts)
+               VALUES(?,?,?,?,?)""",
+            (webhook_id, event, status_code, response_body[:1000], time.time()),
+        )
+
+
+def touch_webhook_fired(wid: int, ok: bool) -> None:
+    """成功调用 ok=True, 失败 ok=False。失败累计 fail_count, 达到阈值自动 disable。"""
+    with _conn() as c:
+        if ok:
+            c.execute("UPDATE webhooks SET last_fired_at=?, fail_count=0 WHERE id=?",
+                      (time.time(), wid))
+        else:
+            c.execute("UPDATE webhooks SET last_fired_at=?, fail_count=fail_count+1 WHERE id=?",
+                      (time.time(), wid))
+            # 失败 5 次自动 disable
+            c.execute("UPDATE webhooks SET active=0 WHERE id=? AND fail_count>=5", (wid,))
+
+
+def list_webhook_deliveries(webhook_id: int, limit: int = 50) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM webhook_deliveries WHERE webhook_id=? ORDER BY ts DESC LIMIT ?",
+            (webhook_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+

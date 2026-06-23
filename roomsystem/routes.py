@@ -211,6 +211,11 @@ async def upload(rh: str, request: Request, file: UploadFile = File(...), ttl: s
                              uploaded_by=nick, expires_at=expires_at, parent_dir=pdir)
     store.audit(rh, request.client.host if request.client else "", "upload", f"{safe} ({_fmt_size(size)})")
     await realtime.broadcast(rh, {"type": "upload", "name": safe, "size": size, "by": nick})
+    try:
+        from .routes_v3 import fire_event
+        await fire_event("file.uploaded", rh, {"name": safe, "size": size, "by": nick})
+    except Exception:
+        pass
     # v2.3.0 异步生成缩略图（不阻塞响应）
     try:
         from . import thumbs
@@ -313,6 +318,11 @@ async def delete(rh: str, request: Request, name: str = File(...)):
     ok = store.soft_delete_file(rh, name)
     store.audit(rh, request.client.host if request.client else "", "delete", name)
     await realtime.broadcast(rh, {"type": "delete", "name": name})
+    try:
+        from .routes_v3 import fire_event
+        await fire_event("file.deleted", rh, {"name": name})
+    except Exception:
+        pass
     return {"ok": ok}
 
 

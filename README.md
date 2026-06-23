@@ -215,7 +215,41 @@ SIGNED=$(curl -s -H "Authorization: Bearer $TOKEN" \
 curl "$SIGNED" -o file.bin       # 单条命令搞定！
 ```
 
-> 💡 **后续**：rc4 加 WebHook（事件订阅 + HMAC 投递）；final 加 CLI `trs` + Python SDK。
+### 4d. rc.4 增补：WebHook 事件订阅
+
+**杀手锏**：让 CI / 备份 / IM 通知 / 任何外部系统订阅你的 Room 事件。
+
+- `GET    /api/v3/admin/webhooks` —— 列出所有 webhook（admin scope）
+- `POST   /api/v3/admin/webhooks` —— 创建（body 含 `name`/`url`/`secret`/`events`/`room_hash`）
+- `GET    /api/v3/admin/webhooks/{id}` —— 单个详情
+- `PATCH  /api/v3/admin/webhooks/{id}` —— 改 `name`/`url`/`secret`/`events`/`active`
+- `DELETE /api/v3/admin/webhooks/{id}` —— 删除
+- `GET    /api/v3/admin/webhooks/{id}/deliveries` —— 最近 50 次投递历史
+
+**事件**：`file.uploaded` / `file.deleted` / `file.restored` / `file.purged`
+
+**签名**：Header `X-Room-Signature-256: t=<ts>,v1=<hmac_sha256>`
+- 签名内容：`HMAC(secret, f"{ts}.".encode() + body)`
+- secret 是用户自己设的字符串
+- 失败累计 5 次自动 disable
+
+**用法示例**：
+```python
+# 接收端（你的 webhook handler）
+import hmac, hashlib
+def handle(request):
+    sig = request.headers["X-Room-Signature-256"]  # "t=123,v1=abc..."
+    ts, recv = sig.split(",v1=")
+    msg = f"{ts}.".encode() + request.body
+    expected = hmac.new(SECRET, msg, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, recv):
+        return 403
+    event = request.headers["X-Room-Event"]  # "file.uploaded"
+    payload = request.json()  # {"event": ..., "room": ..., "name": ..., "size": ...}
+    ...
+```
+
+> 💡 **下一步**：v3.0.0 final 加 CLI `trs` + Python SDK。
 
 ### 5. 快速试用
 

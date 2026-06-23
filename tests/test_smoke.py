@@ -710,6 +710,99 @@ def run_tests(host, port):
     s, d, _, _ = req(host, port, "GET", f"/api/v3/rooms/{R}/presign?file_id={pid}")
     check("presign 未授权 401", s == 401, str(s))
 
+    print("\n=== v3.0.0-rc.4 WebHook 系统 ===")
+    # 起一个简易 webhook 接收器（用 aiohttp 不可靠，改用 Python http.server 简单版）
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received_webhooks = []
+
+    class WebhookHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            received_webhooks.append({
+                "path": self.path,
+                "headers": dict(self.headers),
+                "body": body,
+            })
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args, **kwargs):
+            pass  # silent
+
+    server = HTTPServer(("127.0.0.1", 0), WebhookHandler)  # 端口自动分配
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    webhook_port = server.server_address[1]
+    webhook_url = f"http://127.0.0.1:{webhook_port}/hook"
+
+    # 1) 创建 webhook
+    body = json.dumps({"name": "smoke-hook", "url": webhook_url,
+                       "secret": "hooksecret", "events": "file.uploaded,file.deleted"})
+    s, d, _, _ = req(host, port, "POST", "/api/v3/admin/webhooks", auth_h2, body=body.encode())
+    check("webhook 创建 201", s == 201, str(s))
+    wh = json.loads(d)
+    wid = wh["id"]
+    check("webhook 不返回 secret", "secret" not in wh, str(wh))
+
+    # 2) 列出 webhook
+    s, d, _, _ = req(host, port, "GET", "/api/v3/admin/webhooks", auth_h2)
+    check("webhook 列出 包含", s == 200 and any(w["id"] == wid for w in json.loads(d)["items"]), "")
+
+    # 3) 上传文件触发 webhook
+    received_webhooks.clear()
+    b = "BNDRYHOOK"
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+        body=mp("file", "hook_target.txt", b"webhook test", boundary=b))
+    # fire_event 是 asyncio.create_task 异步执行，等一下
+    time.sleep(1.5)
+    check("webhook 收到 file.uploaded", any("file.uploaded" in w["body"].decode("utf-8","replace")
+                                          for w in received_webhooks), str(len(received_webhooks)))
+
+    # 4) 验证签名
+    hook_received = next((w for w in received_webhooks if "file.uploaded" in w["body"].decode("utf-8","replace")), None)
+    if hook_received:
+        sig_header = hook_received["headers"].get("X-Room-Signature-256", "")
+        check("webhook 带 X-Room-Signature-256", "t=" in sig_header and "v1=" in sig_header, sig_header)
+        # 手动验签：t=<ts>.<body>, sig=HMAC(secret, t.body)
+        if sig_header.startswith("t=") and ",v1=" in sig_header:
+            import hmac as _hm
+            ts_str, sig_recv = sig_header.split(",v1=")
+            ts = ts_str.split("=")[1]
+            msg = f"{ts}.".encode() + hook_received["body"]
+            expected = _hm.new(b"hooksecret", msg, hashlib.sha256).hexdigest()
+            check("webhook 签名验证通过", expected == sig_recv, f"expected={expected[:16]}, got={sig_recv[:16]}")
+
+    # 5) 删除 webhook
+    s, d, _, _ = req(host, port, "DELETE", f"/api/v3/admin/webhooks/{wid}", auth_h2)
+    check("webhook 删除 204", s == 204, str(s))
+
+    # 6) 列出 deliveries（删除前已记录）
+    s, d, _, _ = req(host, port, "GET", f"/api/v3/admin/webhooks/{wid}/deliveries", auth_h2)
+    # 已被删, webhooks 删了 deliveries 应空
+    # webhook 被 DELETE, deliveries 一起被 DELETE, 返回 [] 是预期
+
+    # 7) 非 admin 调 webhook 创建 → 403
+    body = json.dumps({"name": "evil", "url": webhook_url, "secret": "xxxx", "events": "file.uploaded"})
+    # 用 X-Bootstrap-Password 直接创建 user scope token（不依赖之前的 admin token）
+    bs_h = {"X-Bootstrap-Password": admin_pw, "Content-Type": "application/json"}
+    body_create = json.dumps({"name": "smoke-user", "scope": "user", "room_hash": R}).encode()
+    s, d, _, _ = req(host, port, "POST", "/api/v3/auth/tokens", bs_h, body=body_create)
+    if s != 201:
+        # 没有 token 时 bootstrap 创建；已存在则可换个名字
+        body_create = json.dumps({"name": "smoke-user-2", "scope": "user", "room_hash": R}).encode()
+        s, d, _, _ = req(host, port, "POST", "/api/v3/auth/tokens", bs_h, body=body_create)
+    utok = json.loads(d)["token"]
+    user_h = {"Authorization": "Bearer " + utok, "Content-Type": "application/json"}
+    s, d, _, _ = req(host, port, "POST", "/api/v3/admin/webhooks", user_h, body=body.encode())
+    check("user scope 调 admin/webhooks 403", s == 403, f"status={s} body={d[:200] if d else ''}")
+
+    # 清理简易 webhook server
+    server.shutdown()
     print("\n=== WebSocket 实时 (Phase 5) ===")
     try:
         import websockets

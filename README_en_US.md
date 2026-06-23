@@ -215,7 +215,41 @@ SIGNED=$(curl -s -H "Authorization: Bearer $TOKEN" \
 curl "$SIGNED" -o file.bin       # one command, done!
 ```
 
-> 💡 **Upcoming**: rc4 adds WebHooks (event subscription + HMAC delivery); final adds CLI `trs` + Python SDK.
+### 4d. rc.4: WebHook event subscriptions
+
+**Killer feature**: let CI / backups / IM notifications / any external system subscribe to your Room events.
+
+- `GET    /api/v3/admin/webhooks` — list all webhooks (admin scope)
+- `POST   /api/v3/admin/webhooks` — create (body: `name` / `url` / `secret` / `events` / `room_hash`)
+- `GET    /api/v3/admin/webhooks/{id}` — single details
+- `PATCH  /api/v3/admin/webhooks/{id}` — modify `name` / `url` / `secret` / `events` / `active`
+- `DELETE /api/v3/admin/webhooks/{id}` — delete
+- `GET    /api/v3/admin/webhooks/{id}/deliveries` — last 50 delivery attempts
+
+**Events**: `file.uploaded` / `file.deleted` / `file.restored` / `file.purged`
+
+**Signature**: Header `X-Room-Signature-256: t=<ts>,v1=<hmac_sha256>`
+- Signed content: `HMAC(secret, f"{ts}.".encode() + body)`
+- `secret` is a user-chosen string
+- Auto-disables after 5 consecutive failures
+
+**Usage example**:
+```python
+# Receiver (your webhook handler)
+import hmac, hashlib
+def handle(request):
+    sig = request.headers["X-Room-Signature-256"]  # "t=123,v1=abc..."
+    ts, recv = sig.split(",v1=")
+    msg = f"{ts}.".encode() + request.body
+    expected = hmac.new(SECRET, msg, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, recv):
+        return 403
+    event = request.headers["X-Room-Event"]  # "file.uploaded"
+    payload = request.json()  # {"event": ..., "room": ..., "name": ..., "size": ...}
+    ...
+```
+
+> 💡 **Next**: v3.0.0 final adds CLI `trs` + Python SDK.
 
 ### 5. Quick try
 
