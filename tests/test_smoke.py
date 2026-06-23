@@ -529,6 +529,127 @@ def run_tests(host, port):
     h3 = headers_for_old("/api/v3/auth/tokens")
     check("v3 路径无 Deprecation header", h3 == {}, repr(h3))
 
+    print("\n=== v3.0.0-rc.2 文件 PATCH / 批量 / 查询 / 审计 ===")
+    auth_h = {"Authorization": "Bearer " + admin_token,
+              "Content-Type": "application/json"}
+
+    # 先用 admin token 列 token 拿到刚创的（可能已删/未删；创一个新的）
+    create_body = json.dumps({"name": "rc2-admin", "scope": "admin"}).encode()
+    s, d, _, _ = req(host, port, "POST", "/api/v3/auth/tokens",
+                     {"X-Bootstrap-Password": admin_pw, "Content-Type": "application/json"},
+                     body=create_body)
+    assert s == 201, f"create token: {s}"
+    tok2 = json.loads(d)
+    admin2 = tok2["token"]
+    auth_h2 = {"Authorization": "Bearer " + admin2, "Content-Type": "application/json"}
+
+    # 1) PATCH 文件名
+    b = "BNDRYRC2A"
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+        body=mp("file", "rc2_orig.txt", b"to be renamed", boundary=b))
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    files_pre = json.loads(d)
+    target = next(f for f in files_pre if f["name"] == "rc2_orig.txt")
+    fid = target["id"]
+    body = json.dumps({"name": "rc2_renamed.txt"}).encode()
+    s, d, _, _ = req(host, port, "PATCH", f"/api/v3/rooms/{R}/files/{fid}",
+                     auth_h2, body=body)
+    check("PATCH 改名 200", s == 200, str(s))
+    check("PATCH 改名生效", json.loads(d).get("name") == "rc2_renamed.txt", str(d)[:80])
+
+    # 2) PATCH parent_dir
+    body = json.dumps({"parent_dir": "subdir/inner"}).encode()
+    s, d, _, _ = req(host, port, "PATCH", f"/api/v3/rooms/{R}/files/{fid}",
+                     auth_h2, body=body)
+    check("PATCH parent_dir 生效", json.loads(d).get("parent_dir") == "subdir/inner", str(d)[:80])
+
+    # 3) PATCH expires_at 永久
+    body = json.dumps({"expires_at": 0}).encode()
+    s, d, _, _ = req(host, port, "PATCH", f"/api/v3/rooms/{R}/files/{fid}",
+                     auth_h2, body=body)
+    check("PATCH 永久 生效", json.loads(d).get("expires_at") == 0, str(d)[:80])
+
+    # 4) 批量软删
+    b2 = "BNDRYRC2B"
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b2}"},
+        body=mp("file", "batch_a.txt", b"a", boundary=b2))
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b2}"},
+        body=mp("file", "batch_b.txt", b"b", boundary=b2))
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    fl = json.loads(d)
+    batch_ids = [f["id"] for f in fl if f["name"] in ("batch_a.txt", "batch_b.txt")]
+    body = json.dumps({"ids": batch_ids}).encode()
+    s, d, _, _ = req(host, port, "POST", f"/api/v3/rooms/{R}/files/batch-delete",
+                     auth_h2, body=body)
+    check("批量软删 200", s == 200, str(s))
+    dr = json.loads(d)
+    check("批量软删删除数 2", dr.get("deleted") == 2, str(dr))
+
+    # 5) 批量恢复
+    body = json.dumps({"ids": batch_ids}).encode()
+    s, d, _, _ = req(host, port, "POST", f"/api/v3/rooms/{R}/files/batch-restore",
+                     auth_h2, body=body)
+    check("批量恢复 200", s == 200, str(s))
+    check("批量恢复数 2", json.loads(d).get("restored") == 2, "")
+
+    # 6) 批量永久删（先再软删）
+    req(host, port, "POST", f"/api/v3/rooms/{R}/files/batch-delete",
+        auth_h2, body=json.dumps({"ids": batch_ids}).encode())
+    s, d, _, _ = req(host, port, "POST", f"/api/v3/rooms/{R}/files/batch-purge",
+                     auth_h2, body=json.dumps({"ids": batch_ids}).encode())
+    check("批量永久删 200", s == 200, str(s))
+    check("批量永久删数 2", json.loads(d).get("purged") == 2, "")
+
+    # 7) 查询增强：q + ext + sort + 分页
+    b3 = "BNDRYRC2C"
+    for n in ("alpha.txt", "alpha.md", "beta.txt"):
+        req(host, port, "POST", f"/upload/{R}",
+            {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b3}"},
+            body=mp("file", n, b"x", boundary=b3))
+    s, d, _, _ = req(host, port, "GET", f"/api/v3/rooms/{R}/files?q=alpha",
+                     auth_h2)
+    items = json.loads(d)["items"]
+    check("查询 q=alpha 命中 2 个", len(items) == 2, str(len(items)))
+    s, d, _, _ = req(host, port, "GET", f"/api/v3/rooms/{R}/files?ext=md",
+                     auth_h2)
+    items = json.loads(d)["items"]
+    check("查询 ext=md 命中 >=1", len(items) >= 1, str(len(items)))
+    s, d, _, _ = req(host, port, "GET", f"/api/v3/rooms/{R}/files?sort=name&per_page=2&page=1",
+                     auth_h2)
+    page = json.loads(d)
+    check("分页 per_page=2", page["pagination"]["per_page"] == 2, str(page["pagination"]))
+    check("分页 total_pages >= 1", page["pagination"]["total_pages"] >= 1, str(page["pagination"]))
+
+    # 8) 审计分页 + 过滤
+    s, d, _, _ = req(host, port, "GET", "/api/v3/admin/audit?per_page=5&page=1",
+                     auth_h2)
+    audit = json.loads(d)
+    check("admin 审计分页 200", s == 200 and "items" in audit, str(s))
+    check("审计 per_page=5", audit["pagination"]["per_page"] == 5, str(audit["pagination"]))
+    # 过滤：按 action
+    s, d, _, _ = req(host, port, "GET", "/api/v3/admin/audit?action=upload&per_page=3",
+                     auth_h2)
+    audit = json.loads(d)
+    check("审计 action=upload 过滤", all(it["action"] == "upload" for it in audit["items"]), "")
+
+    # 9) admin 房间详情
+    s, d, _, _ = req(host, port, "GET", f"/api/v3/admin/rooms/{R}", auth_h2)
+    check("admin 单房间详情 200", s == 200, str(s))
+
+    # 10) 回收站 empty（先有内容再空）
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    fl = json.loads(d)
+    some_id = fl[0]["id"]
+    req(host, port, "POST", f"/api/v3/rooms/{R}/files/batch-delete",
+        auth_h2, body=json.dumps({"ids": [some_id]}).encode())
+    s, d, _, _ = req(host, port, "POST", f"/api/v3/rooms/{R}/recycle/empty", auth_h2)
+    check("回收站 empty 200", s == 200, str(s))
+    s, d, _, _ = req(host, port, "GET", f"/api/v3/rooms/{R}/recycle", auth_h2)
+    check("回收站 empty 后清空", json.loads(d)["pagination"]["total"] == 0, "")
+
     print("\n=== WebSocket 实时 (Phase 5) ===")
     try:
         import websockets

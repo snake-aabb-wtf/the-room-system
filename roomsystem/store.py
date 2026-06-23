@@ -170,6 +170,171 @@ def list_files(room_hash: str, include_deleted: bool = False) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def list_files_v3(room_hash: str, q: str = "", parent_dir: str | None = None,
+                  exts: list[str] | None = None, sort: str = "time",
+                  page: int = 1, per_page: int = 50,
+                  include_deleted: bool = False) -> tuple[list[dict], int]:
+    """v3.0 房间文件查询：q (name/parent_dir 模糊), parent_dir (精确), exts (扩展名列表), sort, page/per_page。
+    返回 (rows, total_count)。"""
+    where = ["room_hash=?"]
+    args: list = [room_hash]
+    if not include_deleted:
+        where.append("deleted=0")
+    if q:
+        where.append("(name LIKE ? OR parent_dir LIKE ?)")
+        like = f"%{q}%"
+        args += [like, like]
+    if parent_dir is not None:
+        where.append("parent_dir=?")
+        args.append(parent_dir)
+    if exts:
+        placeholders = ",".join("?" for _ in exts)
+        where.append(f"ext IN ({placeholders})")
+        args += [e.lstrip(".").lower() for e in exts]
+    where_sql = " AND ".join(where)
+    order_sql = {
+        "time": "created_at DESC, id DESC",
+        "name": "name COLLATE NOCASE ASC",
+        "size_asc": "size ASC",
+        "size_desc": "size DESC",
+    }.get(sort, "created_at DESC, id DESC")
+    offset = max(0, (page - 1) * per_page)
+
+    with _conn() as c:
+        total = c.execute(f"SELECT COUNT(*) AS n FROM files WHERE {where_sql}", args).fetchone()["n"]
+        rows = c.execute(
+            f"SELECT * FROM files WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            args + [per_page, offset],
+        ).fetchall()
+    return [dict(r) for r in rows], total
+
+
+def soft_delete_files_batch(file_ids: list[int], room_hash: str) -> tuple[int, list[dict]]:
+    """批量软删除：返回 (成功数, 失败 [{id, error}])。"""
+    from . import realtime
+    import asyncio
+    success = 0
+    failed = []
+    # 一次查所有目标
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, name, room_hash FROM files WHERE id IN ({}) AND deleted=0".format(
+                ",".join("?" * len(file_ids))
+            ),
+            file_ids,
+        ).fetchall()
+    valid = [dict(r) for r in rows if r["room_hash"] == room_hash]
+    valid_ids = {r["id"] for r in valid}
+    for fid in file_ids:
+        if fid not in valid_ids:
+            failed.append({"id": fid, "error": "not_found_or_wrong_room"})
+    if not valid:
+        return 0, failed
+    now = time.time()
+    valid_ids = [r["id"] for r in valid]
+    with _conn() as c:
+        for fid in valid_ids:
+            c.execute("UPDATE files SET deleted=1, deleted_at=? WHERE id=?", (now, fid))
+            success += 1
+    # 广播（单次）
+    for r in valid:
+        try:
+            asyncio.create_task(realtime.broadcast(room_hash, {"type": "delete", "name": r["name"]}))
+        except Exception:
+            pass
+    return success, failed
+
+
+def restore_files_batch(file_ids: list[int], room_hash: str) -> tuple[int, list[dict]]:
+    """批量恢复：从回收站恢复。"""
+    from . import realtime
+    import asyncio
+    success = 0
+    failed = []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, name, room_hash FROM files WHERE id IN ({}) AND deleted=1".format(
+                ",".join("?" * len(file_ids))
+            ),
+            file_ids,
+        ).fetchall()
+    valid = [dict(r) for r in rows if r["room_hash"] == room_hash]
+    valid_ids = {r["id"] for r in valid}
+    for fid in file_ids:
+        if fid not in valid_ids:
+            failed.append({"id": fid, "error": "not_in_recycle_or_wrong_room"})
+    if not valid:
+        return 0, failed
+    valid_ids = [r["id"] for r in valid]
+    with _conn() as c:
+        for fid in valid_ids:
+            c.execute("UPDATE files SET deleted=0, deleted_at=NULL WHERE id=?", (fid,))
+            success += 1
+    for r in valid:
+        try:
+            asyncio.create_task(realtime.broadcast(room_hash, {"type": "restore", "name": r["name"]}))
+        except Exception:
+            pass
+    return success, failed
+
+
+def purge_files_batch(file_ids: list[int], room_hash: str) -> tuple[int, list[dict]]:
+    """批量物理删除（仅作用于软删文件）。"""
+    from .security import ensure_within
+    from .config import FILES_DIR
+    success = 0
+    failed = []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, name, stored_name, room_hash FROM files WHERE id IN ({}) AND deleted=1".format(
+                ",".join("?" * len(file_ids))
+            ),
+            file_ids,
+        ).fetchall()
+    valid = [dict(r) for r in rows if r["room_hash"] == room_hash]
+    valid_ids = {r["id"] for r in valid}
+    for fid in file_ids:
+        if fid not in valid_ids:
+            failed.append({"id": fid, "error": "not_in_recycle_or_wrong_room"})
+    if not valid:
+        return 0, failed
+    for r in valid:
+        try:
+            ensure_within(FILES_DIR / room_hash, stored_path(room_hash, r["stored_name"])).unlink(missing_ok=True)
+        except Exception:
+            pass
+    if valid:
+        ids = [r["id"] for r in valid]
+        with _conn() as c2:
+            qmarks = ",".join("?" * len(ids))
+            c2.execute(f"DELETE FROM files WHERE id IN ({qmarks})", ids)
+        success = len(valid)
+    return success, failed
+
+
+def empty_recycle(room_hash: str) -> int:
+    """清空某房间回收站（30 天前的会被自动清理，但手动清空是一次性物理删）。返回删除数。"""
+    from .security import ensure_within
+    from .config import FILES_DIR
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, name, stored_name FROM files WHERE room_hash=? AND deleted=1",
+            (room_hash,),
+        ).fetchall()
+    # 把所有需要删的 id 收集到内存（通常不多，<500），统一在新的连接里删
+    ids = [r["id"] for r in rows]
+    for r in rows:
+        try:
+            ensure_within(FILES_DIR / room_hash, stored_path(room_hash, r["stored_name"])).unlink(missing_ok=True)
+        except Exception:
+            pass
+    if ids:
+        with _conn() as c2:
+            qmarks = ",".join("?" * len(ids))
+            c2.execute(f"DELETE FROM files WHERE id IN ({qmarks})", ids)
+    return len(ids)
+
+
 def get_file(room_hash: str, name: str) -> dict | None:
     with _conn() as c:
         r = c.execute(
@@ -189,6 +354,46 @@ def get_file_by_id(file_id: int) -> dict | None:
 def set_thumb_status(file_id: int, status: str) -> None:
     with _conn() as c:
         c.execute("UPDATE files SET thumb_status=? WHERE id=?", (status, file_id))
+
+
+def update_file(file_id: int, name: str | None = None,
+                parent_dir: str | None = None,
+                expires_at: float | None = -1) -> dict | None:
+    """v3.0 PATCH /files/{id} 后端：部分更新文件元数据。
+    - name 走 clean_name；新名重复时返回 None
+    - parent_dir 走安全清洗
+    - expires_at=-1 表示不变；None=永久；正数=绝对时间戳
+    返回更新后的行（dict）或 None（失败）。
+    """
+    from .security import clean_name
+    sets, args = [], []
+    if name is not None:
+        new = clean_name(name)
+        if not new or new in (".", ".."):
+            return None
+        sets.append("name=?"); args.append(new)
+    if parent_dir is not None:
+        # 与 upload 一致的安全清洗
+        pdir = (parent_dir or "").replace("\\", "/").strip().strip("/")
+        for seg in pdir.split("/") if pdir else []:
+            if seg in ("", ".", ".."):
+                pdir = ""; break
+        pdir = pdir[:100]
+        sets.append("parent_dir=?"); args.append(pdir)
+    if expires_at != -1:
+        sets.append("expires_at=?"); args.append(expires_at)
+    if not sets:
+        return get_file_by_id(file_id)
+    args.append(file_id)
+    with _conn() as c:
+        try:
+            cur = c.execute(f"UPDATE files SET {','.join(sets)} WHERE id=?", args)
+            if cur.rowcount == 0 and name is not None:
+                # 名字改了但 rowcount 0 ——可能是 UNIQUE 冲突
+                return None
+        except Exception:
+            return None
+    return get_file_by_id(file_id)
 
 
 def get_files_by_ids(file_ids: list[int]) -> list[dict]:
@@ -301,7 +506,41 @@ def recent_audit(limit: int = 300) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def recent_audit_v3(page: int = 1, per_page: int = 50,
+                    action: str = "", room_hash: str = "",
+                    ip: str = "", since: float = 0, before: float = 0) -> tuple[list[dict], int]:
+    """v3.0 审计分页 + 过滤。返回 (rows, total)。"""
+    where, args = [], []
+    if action:
+        where.append("action=?"); args.append(action)
+    if room_hash:
+        where.append("room_hash=?"); args.append(room_hash)
+    if ip:
+        where.append("client_ip=?"); args.append(ip)
+    if since:
+        where.append("ts>=?"); args.append(since)
+    if before:
+        where.append("ts<=?"); args.append(before)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    offset = max(0, (page - 1) * per_page)
+    with _conn() as c:
+        total = c.execute(f"SELECT COUNT(*) AS n FROM audit {where_sql}", args).fetchone()["n"]
+        rows = c.execute(
+            f"SELECT * FROM audit {where_sql} ORDER BY ts DESC LIMIT ? OFFSET ?",
+            args + [per_page, offset],
+        ).fetchall()
+    return [dict(r) for r in rows], total
+
+
 # ── Phase 4: 管理统计 ────────────────────────────
+def _fmt_size_h(n: float) -> str:
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f}{u}"
+        n /= 1024
+    return f"{n:.1f}TB"
+
+
 def stats() -> dict:
     with _conn() as c:
         rooms = c.execute("SELECT COUNT(*) n FROM rooms").fetchone()["n"]
@@ -314,6 +553,7 @@ def stats() -> dict:
         "rooms": rooms,
         "files": files["n"],
         "total_size": files["s"],
+        "total_size_h": _fmt_size_h(files["s"]),
         "downloads": files["d"],
         "messages": msgs,
         "audit_events": audits,

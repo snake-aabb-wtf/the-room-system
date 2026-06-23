@@ -163,14 +163,38 @@ curl -OJ http://你的IP:3005/raw/房间hash/文件名
   - `Link: <...api/v3>; rel="successor-version"`
 - v3.1 之后移除旧路径；6 个月过渡期
 
-### 4. v3 端点首批（`/api/v3/auth/tokens`）
+### 4. v3 端点首批（`/api/v3/auth/tokens` + rc.2 补全）
 - `GET  /api/v3/auth/tokens` —— 列出所有 token（admin scope）
 - `POST /api/v3/auth/tokens` —— 创建新 token（**仅此一次返回明文 token**）
 - `GET  /api/v3/auth/tokens/{id}` —— 单个 token 详情
 - `PATCH /api/v3/auth/tokens/{id}` —— 改 name/expires_at
 - `DELETE /api/v3/auth/tokens/{id}` —— 吊销
 
-> 💡 **后续阶段**：v3.0.0-rc2 补 PATCH/批量/查询增强/审计分页，rc3 加预签名 URL + WebHook。
+### 4b. rc.2 增补：文件 CRUD + 批量 + 查询增强 + 审计
+
+**文件**：
+- `GET    /api/v3/rooms/{rh}/files` —— 分页 + 过滤（`q`/`parent_dir`/`ext`/`sort`/`page`/`per_page`/`include_deleted`）
+- `GET    /api/v3/rooms/{rh}/files/{id}` —— 单文件元数据
+- `PATCH  /api/v3/rooms/{rh}/files/{id}` —— 改 `name` / `parent_dir` / `expires_at`（`readonly` token 拒）
+- `DELETE /api/v3/rooms/{rh}/files/{id}` —— 软删除（返回 `recycle`）
+- `POST   /api/v3/rooms/{rh}/files/batch-delete`  body=`{ids:[...]}` —— 批量软删
+- `POST   /api/v3/rooms/{rh}/files/batch-restore` —— 批量恢复
+- `POST   /api/v3/rooms/{rh}/files/batch-purge` —— 批量永久删
+
+**回收站**：
+- `GET  /api/v3/rooms/{rh}/recycle` —— 回收站分页
+- `POST /api/v3/rooms/{rh}/recycle/empty` —— **清空回收站**
+
+**管理员**：
+- `GET /api/v3/admin/stats` —— 全局统计
+- `GET /api/v3/admin/rooms` —— 房间列表分页 + 搜索
+- `GET /api/v3/admin/rooms/{rh}` —— 单房间详情
+- `GET /api/v3/admin/audit` —— 审计分页 + 过滤（`action`/`room_hash`/`ip`/`since`/`before`）
+- `POST /api/v3/admin/cleanup` —— 触发清理
+
+> 💡 **后续**：rc3 加预签名 URL（HMAC 签名短时下载链接）；rc4 加 WebHook（事件订阅 + HMAC 投递）。
+
+### 5. 快速试用
 
 ### 5. 快速试用
 ```bash

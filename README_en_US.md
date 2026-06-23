@@ -163,14 +163,36 @@ The room hash is the first 16 chars of sha256(password). You rarely need it — 
   - `Link: <...api/v3>; rel="successor-version"`
 - v3.1 will remove old paths; 6-month migration window
 
-### 4. First v3 endpoints (`/api/v3/auth/tokens`)
+### 4. First v3 endpoints (`/api/v3/auth/tokens` + rc.2 extensions)
 - `GET  /api/v3/auth/tokens` — list all tokens (admin scope)
-- `POST /api/v3/auth/tokens` — create new token (**plaintext returned only this once**)
+- `POST /api/v3/auth/tokens` — create new token (**plaintext returned only once**)
 - `GET  /api/v3/auth/tokens/{id}` — single token details
 - `PATCH /api/v3/auth/tokens/{id}` — update name / expires_at
 - `DELETE /api/v3/auth/tokens/{id}` — revoke
 
-> 💡 **Upcoming**: v3.0.0-rc2 adds PATCH / batch / query / audit pagination; rc3 adds presigned URLs + WebHooks.
+### 4b. rc.2: file CRUD + batch + query + audit
+
+**Files**:
+- `GET    /api/v3/rooms/{rh}/files` — paged + filtered (`q` / `parent_dir` / `ext` / `sort` / `page` / `per_page` / `include_deleted`)
+- `GET    /api/v3/rooms/{rh}/files/{id}` — single file metadata
+- `PATCH  /api/v3/rooms/{rh}/files/{id}` — modify `name` / `parent_dir` / `expires_at` (rejected for `readonly` tokens)
+- `DELETE /api/v3/rooms/{rh}/files/{id}` — soft-delete
+- `POST   /api/v3/rooms/{rh}/files/batch-delete`  body=`{ids:[...]}` — batch soft-delete
+- `POST   /api/v3/rooms/{rh}/files/batch-restore` — batch restore from recycle
+- `POST   /api/v3/rooms/{rh}/files/batch-purge` — batch permanent-delete
+
+**Recycle**:
+- `GET  /api/v3/rooms/{rh}/recycle` — recycle paged
+- `POST /api/v3/rooms/{rh}/recycle/empty` — **empty the entire recycle bin**
+
+**Admin**:
+- `GET /api/v3/admin/stats` — global stats
+- `GET /api/v3/admin/rooms` — rooms list paged + searchable
+- `GET /api/v3/admin/rooms/{rh}` — single room details
+- `GET /api/v3/admin/audit` — audit paged + filtered (`action` / `room_hash` / `ip` / `since` / `before`)
+- `POST /api/v3/admin/cleanup` — trigger cleanup
+
+> 💡 **Upcoming**: rc3 adds presigned URLs (HMAC-signed short-lived download links); rc4 adds WebHooks (event subscription + HMAC delivery).
 
 ### 5. Quick try
 ```bash
