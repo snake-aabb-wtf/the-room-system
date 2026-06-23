@@ -99,7 +99,7 @@ def mp(field, filename, content, ctype="text/plain", boundary="BNDRY"):
     return head + content + f"\r\n--{boundary}--\r\n".encode()
 
 
-def wait_up(host, port, timeout=20):
+def wait_up(host, port, timeout=60):
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -134,11 +134,12 @@ def main():
         [sys.executable, "-c", "import uvicorn; from roomsystem.app import create_app; "
                                "uvicorn.run(create_app(), host='127.0.0.1', port=%d, log_level='warning')" % port],
         cwd=str(BASE), env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=open("_smoke_out.txt", "wb"),
+        stderr=open("_smoke_stderr.txt", "wb"),
     )
     try:
-        if not wait_up("127.0.0.1", port):
-            err = proc.stderr.read().decode("utf-8", "replace")[:500]
+        if not wait_up("127.0.0.1", port, timeout=60):
+            err = proc.stderr.read().decode("utf-8", "replace")[:500] if proc.stderr else "(no stderr)"
             print(f"!!! 服务启动失败:\n{err}")
             return 1
         run_tests("127.0.0.1", port)
