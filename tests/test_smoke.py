@@ -277,12 +277,14 @@ def run_tests(host, port):
         ('aria-label="点击或拖入文件上传"', 'dropzone-aria'),
         ('role="dialog"', 'modal-dialog'),
         ('aria-modal="true"', 'aria-modal'),
-        ('role="progressbar"', 'progressbar'),
         ('role="toolbar"', 'toolbar'),
         ('新消息', 'unread-bar-text'),
     ]
     for needle, name in checks_a11y:
         check(f"room.html 包含 {name}", needle in html, needle)
+    # upload-queue.js 静态资源含 progressbar（动态注入的 DOM）
+    s, d, _, _ = req(host, port, "GET", "/static/upload-queue.js")
+    check("upload-queue.js 含 progressbar", s == 200 and b"progressbar" in d, "size="+str(len(d)))
 
     # 鉴权拦截：错口令登录后访问不属于自己的房间 → 拒绝（303 重定向或 403）
     s, _, bad_cookies, _ = req(host, port, "POST", "/auth",
@@ -299,6 +301,61 @@ def run_tests(host, port):
     s, d, _, _ = req(host, port, "GET", f"/api/{R}/messages", {"Cookie": sess})
     msgs = json.loads(d)
     check("留言 v2.1 内容入库", any(m.get("body") == "v2.1 a11y chat" for m in msgs), str(len(msgs)))
+
+    print("\n=== v2.2.0 上传与回收 ===")
+    # upload-queue.js 静态资源
+    s, d, _, _ = req(host, port, "GET", "/static/upload-queue.js")
+    check("upload-queue.js 加载", s == 200 and b"MAX_CONCURRENT" in d and b"xhr.abort" in d, "size="+str(len(d)))
+
+    # 回收站：上传→删→列出→恢复→列出清空；再删→永久删→列出再清空
+    b = "BNDRYR1"
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+        body=mp("file", "recycle_a.txt", b"to be deleted", boundary=b))
+    s, _, _, _ = req(host, port, "POST", f"/delete/{R}",
+                     {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
+                     body="name=recycle_a.txt")
+    check("软删除 recycle_a.txt", s == 200, str(s))
+
+    s, d, _, _ = req(host, port, "GET", f"/recycle/{R}", {"Cookie": sess})
+    recycle = json.loads(d)
+    check("回收站列出含 recycle_a.txt", any(x["name"] == "recycle_a.txt" for x in recycle), str(len(recycle)))
+    check("回收站项含 deleted_at & left_days", recycle and ("deleted_at" in recycle[0]) and ("left_days" in recycle[0]), "")
+
+    s, _, _, _ = req(host, port, "POST", f"/restore/{R}",
+                     {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
+                     body="name=recycle_a.txt")
+    check("恢复 recycle_a.txt", s == 200, str(s))
+
+    s, d, _, _ = req(host, port, "GET", f"/recycle/{R}", {"Cookie": sess})
+    recycle = json.loads(d)
+    check("恢复后回收站不含 recycle_a.txt", not any(x["name"] == "recycle_a.txt" for x in recycle), str(len(recycle)))
+
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    files = json.loads(d)
+    check("恢复后文件列表含 recycle_a.txt", any(f["name"] == "recycle_a.txt" for f in files), "")
+
+    # 永久删除流程：再删 → purge
+    req(host, port, "POST", f"/delete/{R}",
+        {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
+        body="name=recycle_a.txt")
+    s, _, _, _ = req(host, port, "POST", f"/purge/{R}",
+                     {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
+                     body="name=recycle_a.txt")
+    check("永久删除 recycle_a.txt", s == 200, str(s))
+    s, d, _, _ = req(host, port, "GET", f"/recycle/{R}", {"Cookie": sess})
+    check("永久删除后回收站为空",
+          not any(x["name"] == "recycle_a.txt" for x in json.loads(d)), "")
+
+    # 未授权访问回收站
+    s, _, _, _ = req(host, port, "GET", f"/recycle/{R}")
+    check("未授权访问回收站被拒(403)", s == 403, str(s))
+
+    # 删除不存在的文件不报错（返回 ok:false，但状态 200）
+    s, _, _, _ = req(host, port, "POST", f"/delete/{R}",
+                     {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
+                     body="name=does_not_exist.txt")
+    check("删除不存在文件 200 容忍", s == 200, str(s))
 
     print("\n=== WebSocket 实时 (Phase 5) ===")
     try:

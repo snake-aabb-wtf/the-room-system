@@ -158,6 +158,11 @@ The room hash is the first 16 chars of sha256(password). You rarely need it — 
 - 🆕 **ESC closes every overlay**
 - 🆕 **Chat: own vs other messages** + system messages
 - 🆕 **Smart scroll + unread message button**
+- 🆕 **Upload concurrency limit (3 max)** + cancellable
+- 🆕 **Retry on failure** (↻ button, no new row)
+- 🆕 **ETA estimate** ("2 min 30 sec left")
+- 🆕 **FIFO upload order** (doesn't steal focus)
+- 🆕 **Drop overlay flicker fix**
 
 </details>
 
@@ -181,6 +186,7 @@ The room hash is the first 16 chars of sha256(password). You rarely need it — 
 - Traffic / download-count statistics
 - Full audit log persisted
 - One-click room purge
+- 🆕 **Recycle bin**: soft-delete with 30-day retention, restore or permanently delete
 
 </details>
 

@@ -97,6 +97,17 @@
   <div class="empty" id="empty" style="display:none">
     <div class="big" aria-hidden="true">📂</div>这个房间还没有文件<br><span class="muted">拖个文件上来试试吧</span>
   </div>
+  <div id="empty-recycle" class="empty" style="display:none">
+    <div class="big" aria-hidden="true">🗑️</div>回收站是空的<br><span class="muted">删除的文件会在 30 天内保留，可在此恢复</span>
+  </div>
+
+  <!-- 房间视图切换 -->
+  <div class="toolbar" style="margin-top:18px" role="tablist" aria-label="文件视图切换">
+    <button class="btn small sec" id="tabFiles" role="tab" aria-selected="true"
+            onclick="switchTab('files')">📁 文件</button>
+    <button class="btn small ghost" id="tabRecycle" role="tab" aria-selected="false"
+            onclick="switchTab('recycle')">🗑 回收站 <span id="rcBadge" class="tiny muted"></span></button>
+  </div>
 
   <!-- 房间留言 -->
   <section class="chat" aria-labelledby="chat-h">
@@ -147,6 +158,7 @@
 
 <script src="/static/toast.js"></script>
 <script src="/static/error.js"></script>
+<script src="/static/upload-queue.js"></script>
 <script>
 const RH = "{{ rh }}";
 let FILES = {{ files | tojson }};
@@ -224,30 +236,12 @@ function toggleView(){ VIEW = VIEW==='grid'?'list':'grid';
 function filterFiles(){renderFiles();}
 
 let UPLOAD_TTL = "";
-function onPick(files){ for(const f of files) uploadOne(f); }
-function uploadOne(file){
-  const id='uq'+Date.now()+Math.random().toString(36).slice(2,5);
-  document.getElementById('queue').insertAdjacentHTML('afterbegin',
-    `<div class="uq-item" id="${id}">
-       <div class="uq-name"><span>${esc(file.name)}</span><span class="tiny"></span></div>
-       <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="${esc(file.name)} 上传进度"><i></i></div>
-     </div>`);
-  const item=document.getElementById(id);
-  const bar=item.querySelector('.bar > i');
-  const stat=item.querySelector('.uq-name span:last-child');
-  const xhr=new XMLHttpRequest();
-  const fd=new FormData(); fd.append('file',file); fd.append('ttl',UPLOAD_TTL);
-  xhr.upload.onprogress=e=>{if(e.lengthComputable){const p=e.loaded/e.total*100;bar.style.width=p+'%';stat.textContent=Math.round(p)+'%';item.querySelector('.bar').setAttribute('aria-valuenow',Math.round(p));}};
-  xhr.onload=()=>{
-    if(xhr.status===200){
-      const d=JSON.parse(xhr.responseText);
-      bar.style.width='100%';item.querySelector('.bar').className='bar ok';stat.textContent='✓ '+d.size_h;
-      FILES.unshift({id:Date.now(),name:d.name,size:d.size,size_h:d.size_h,ext:'',kind:kindOf(d.name),when:justNow(),dl:0,by:MY_NICK,created_at:Date.now()/1000,expires_at:UPLOAD_TTL?Date.now()/1000+parseFloat(UPLOAD_TTL)*3600:0});
-      renderFiles(); setTimeout(()=>item.remove(),1500);
-    }else{item.querySelector('.bar').className='bar err';stat.textContent='上传失败';toast.error('上传失败：'+xhr.responseText);}
-  };
-  xhr.onerror=()=>{item.querySelector('.bar').className='bar err';stat.textContent='网络错误';toast.error('网络错误，上传失败');};
-  xhr.open('POST',`/upload/${RH}`); xhr.send(fd);
+window.UPLOAD_TTL = '';   // UQ 读这个
+function onPick(files){ UQ.enqueue(files, RH); }
+function onUploadComplete(d, file){
+  FILES.unshift({id:Date.now(),name:d.name,size:d.size,size_h:d.size_h,ext:'',kind:kindOf(d.name),when:justNow(),dl:0,by:MY_NICK,created_at:Date.now()/1000,expires_at:UPLOAD_TTL?Date.now()/1000+parseFloat(UPLOAD_TTL)*3600:0});
+  renderFiles();
+  toast.success('已上传 '+d.name);
 }
 function kindOf(name){const e=name.split('.').pop().toLowerCase();
   return(['mp4','webm','mov','mkv','avi','m4v'].includes(e)?'video':
@@ -264,7 +258,7 @@ let dz=document.getElementById('dz');
 dz.addEventListener('dragenter',e=>{e.preventDefault(); dragCounter++; dz.classList.add('drag');});
 dz.addEventListener('dragover',e=>{e.preventDefault();});
 dz.addEventListener('dragleave',e=>{e.preventDefault(); dragCounter--; if(dragCounter<=0){dragCounter=0; dz.classList.remove('drag');}});
-dz.addEventListener('drop',e=>{e.preventDefault(); dragCounter=0; dz.classList.remove('drag'); for(const f of e.dataTransfer.files) uploadOne(f);});
+dz.addEventListener('drop',e=>{e.preventDefault(); dragCounter=0; dz.classList.remove('drag'); UQ.enqueue(e.dataTransfer.files, RH);});
 
 async function renameF(name){
   const nn=await modalPrompt({title:'重命名',label:'新名字：',defaultValue:name,confirmText:'改名'});
@@ -279,8 +273,93 @@ async function delF(name){
   if(!await modalConfirm({title:'删除文件',body:'确定删除 "'+name+'"？删除后可在回收站恢复（30 天内）。',confirmText:'删除',danger:true}))return;
   try{
     const d=await(await fetch(`/delete/${RH}`,{method:'POST',body:new URLSearchParams({name:name})})).json();
-    if(d.ok){FILES=FILES.filter(x=>x.name!==name);renderFiles();toast.success('已删除');}
+    if(d.ok){FILES=FILES.filter(x=>x.name!==name);renderFiles();toast.success('已删除');updateRecycleBadge();}
     else toast.error('删除失败');
+  }catch(e){}
+}
+
+// ── 回收站 ──
+let RECYCLE = [];
+let CURRENT_TAB = 'files';
+function switchTab(tab){
+  CURRENT_TAB = tab;
+  document.getElementById('tabFiles').className = 'btn small ' + (tab==='files'?'sec':'ghost');
+  document.getElementById('tabFiles').setAttribute('aria-selected', tab==='files');
+  document.getElementById('tabRecycle').className = 'btn small ' + (tab==='recycle'?'sec':'ghost');
+  document.getElementById('tabRecycle').setAttribute('aria-selected', tab==='recycle');
+  document.querySelector('.toolbar [aria-label="文件筛选"]').style.display = tab==='files'?'':'none';
+  document.getElementById('grid').style.display = tab==='files'?'':'none';
+  document.getElementById('list').style.display = (tab==='files' && VIEW==='list')?'':'none';
+  document.getElementById('empty').style.display = (tab==='files' && !FILES.length)?'block':'none';
+  document.getElementById('empty-recycle').style.display = (tab==='recycle' && !RECYCLE.length)?'block':'none';
+  if(tab==='recycle') loadRecycle();
+}
+async function loadRecycle(){
+  try{
+    const list=await(await fetch(`/recycle/${RH}`)).json();
+    RECYCLE = list;
+    renderRecycle();
+    updateRecycleBadge();
+  }catch(e){toast.error('回收站加载失败');}
+}
+function updateRecycleBadge(){
+  const n = RECYCLE.length;
+  document.getElementById('rcBadge').textContent = n?`(${n})`:'';
+}
+function renderRecycle(){
+  if(CURRENT_TAB!=='recycle') return;
+  const grid=document.getElementById('grid');
+  const listEl=document.getElementById('list');
+  const target = VIEW==='grid'?grid:listEl;
+  grid.style.display = VIEW==='grid'?'':'none';
+  listEl.style.display = VIEW==='list'?'':'none';
+  target.innerHTML='';
+  if(!RECYCLE.length){
+    document.getElementById('empty-recycle').style.display='block';
+    return;
+  }
+  document.getElementById('empty-recycle').style.display='none';
+  RECYCLE.forEach(f=>target.appendChild(recycleCard(f)));
+}
+function recycleCard(f){
+  const el=document.createElement('div');
+  el.className='fcard';
+  const leftTxt = f.left_days>0? `${f.left_days} 天后清理` : '即将清理';
+  el.innerHTML = `
+    <div class="ficon" aria-hidden="true">🗑️</div>
+    <div class="fname">${esc(f.name)}</div>
+    <div class="fmeta"><span>${f.size_h}</span><span>删于 ${f.deleted_h}</span><span>${leftTxt}</span></div>
+    <div class="facts">
+      <button class="btn small" onclick="restoreF('${esc(f.name)}')">↩ 恢复</button>
+      <button class="btn small ghost" style="color:#e74c3c;border-color:#e74c3c" onclick="purgeF('${esc(f.name)}')">永久删除</button>
+    </div>`;
+  return el;
+}
+async function restoreF(name){
+  try{
+    const d=await(await fetch(`/restore/${RH}`,{method:'POST',body:new URLSearchParams({name:name})})).json();
+    if(d.ok){
+      // 把文件加回 FILES（重新拉一次或构造）
+      const orig = RECYCLE.find(x=>x.name===name);
+      if(orig){
+        FILES.unshift({id:Date.now(),name:orig.name,size:orig.size,size_h:orig.size_h,ext:orig.ext||'',kind:kindOf(orig.name),when:justNow(),dl:0,by:orig.uploaded_by||'',created_at:orig.created_at,expires_at:orig.expires_at||0});
+        renderFiles();
+      }
+      RECYCLE = RECYCLE.filter(x=>x.name!==name);
+      renderRecycle(); updateRecycleBadge();
+      toast.success('已恢复');
+    } else toast.error('恢复失败');
+  }catch(e){}
+}
+async function purgeF(name){
+  if(!await modalConfirm({title:'永久删除',body:'确定要永久删除 "'+name+'" 吗？此操作不可撤销！',confirmText:'永久删除',danger:true}))return;
+  try{
+    const d=await(await fetch(`/purge/${RH}`,{method:'POST',body:new URLSearchParams({name:name})})).json();
+    if(d.ok){
+      RECYCLE = RECYCLE.filter(x=>x.name!==name);
+      renderRecycle(); updateRecycleBadge();
+      toast.success('已永久删除');
+    } else toast.error('操作失败');
   }catch(e){}
 }
 
@@ -394,7 +473,8 @@ function connectWs(){
     const msg = JSON.parse(ev.data);
     if(msg.type==='message'){ appendMsg(msg); }
     else if(msg.type==='upload'){ appendMsg({_sys:true, body: msg.by?`${msg.by} 上传了 ${msg.name}`:`上传了 ${msg.name}`, when: nowHM()}); flashNewFile(msg.name); }
-    else if(msg.type==='delete'){ appendMsg({_sys:true, body: `删除了 ${msg.name}`, when: nowHM()}); FILES=FILES.filter(x=>x.name!==msg.name); renderFiles(); }
+    else if(msg.type==='delete'){ appendMsg({_sys:true, body: `删除了 ${msg.name}`, when: nowHM()}); FILES=FILES.filter(x=>x.name!==msg.name); renderFiles(); loadRecycle(); }
+    else if(msg.type==='restore'){ appendMsg({_sys:true, body: `恢复了 ${msg.name}`, when: nowHM()}); flashNewFile(msg.name); loadRecycle(); }
   };
   WS.onopen = ()=>{ document.getElementById('online').textContent='已连接'; document.getElementById('onlineDot').classList.remove('off');};
   WS.onclose = ()=>{ document.getElementById('online').textContent='重连中…'; document.getElementById('onlineDot').classList.add('off'); setTimeout(connectWs,3000);};
@@ -479,7 +559,7 @@ function justNow(){const d=new Date();return (d.getMonth()+1+'').padStart(2,'0')
 function fmtSize(n){for(const u of['B','KB','MB','GB']){if(n<1024)return n.toFixed(1)+u;n/=1024;}return n.toFixed(1)+'TB';}
 function copy(t){navigator.clipboard.writeText(t).then(()=>{event.target.textContent='已复制✓';setTimeout(()=>event.target.textContent='复制',1200);}).catch(()=>toast.error('复制失败，请手动选中'));}
 
-renderFiles(); loadMsgs(); connectWs();
+renderFiles(); loadMsgs(); connectWs(); loadRecycle();
 </script>
 </body>
 </html>

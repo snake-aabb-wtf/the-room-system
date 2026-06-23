@@ -292,6 +292,47 @@ async def delete(rh: str, request: Request, name: str = File(...)):
     return {"ok": ok}
 
 
+# ── Phase v2.2.0: 回收站 ──────────────────────────
+@router.get("/recycle/{rh}")
+def recycle_list(rh: str, request: Request):
+    if current_room(request) != rh:
+        raise HTTPException(403)
+    rows = store.list_deleted(rh)
+    for r in rows:
+        r["size_h"] = _fmt_size(r["size"])
+        r["deleted_h"] = time.strftime("%m-%d %H:%M", time.localtime(r["deleted_at"])) if r.get("deleted_at") else "-"
+        # 剩余天数
+        left = (r["deleted_at"] + 30 * 24 * 3600) - time.time() if r.get("deleted_at") else 0
+        r["left_days"] = max(0, int(left / 86400))
+    return rows
+
+
+@router.post("/restore/{rh}")
+async def restore(rh: str, request: Request, name: str = File(...)):
+    if current_room(request) != rh:
+        raise HTTPException(403)
+    ok = store.restore_file(rh, name)
+    if ok:
+        store.audit(rh, request.client.host if request.client else "", "restore", name)
+        await realtime.broadcast(rh, {"type": "restore", "name": name})
+    return {"ok": ok}
+
+
+@router.post("/purge/{rh}")
+async def purge(rh: str, request: Request, name: str = File(...)):
+    """从回收站永久删除一个文件。"""
+    if current_room(request) != rh:
+        raise HTTPException(403)
+    stored = store.purge_one(rh, name)
+    if stored:
+        try:
+            ensure_within(FILES_DIR / rh, store.stored_path(rh, stored)).unlink(missing_ok=True)
+        except Exception:
+            pass
+        store.audit(rh, request.client.host if request.client else "", "purge", name)
+    return {"ok": stored is not None}
+
+
 # ── 房间内昵称（Phase 5 预备，本身无害，提前开）──
 @router.post("/nick/{rh}")
 def set_nick(rh: str, request: Request, nick: str = File(...)):

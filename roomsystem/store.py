@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS files (
     uploaded_by  TEXT DEFAULT '',             -- 昵称（Phase 5）
     created_at   REAL NOT NULL,
     expires_at   REAL DEFAULT NULL,           -- 到期时间戳（Phase 5）
-    dl_count     INTEGER DEFAULT 0            -- 下载次数（Phase 4 统计）
+    dl_count     INTEGER DEFAULT 0,           -- 下载次数（Phase 4 统计）
+    deleted_at   REAL DEFAULT NULL            -- 软删除时间（v2.2.0 回收站，30 天保留）
 );
 CREATE INDEX IF NOT EXISTS idx_files_room ON files(room_hash);
 
@@ -151,12 +152,61 @@ def rename_file(room_hash: str, old_name: str, new_name: str, new_stored: str) -
 
 
 def soft_delete_file(room_hash: str, name: str) -> bool:
+    """软删除：标 deleted=1，记 deleted_at=now（v2.2.0 起 30 天内可恢复）。"""
+    now = time.time()
     with _conn() as c:
         cur = c.execute(
-            "UPDATE files SET deleted=1 WHERE room_hash=? AND name=? AND deleted=0",
+            "UPDATE files SET deleted=1, deleted_at=? "
+            "WHERE room_hash=? AND name=? AND deleted=0",
+            (now, room_hash, name),
+        )
+        return cur.rowcount > 0
+
+
+def list_deleted(room_hash: str) -> list[dict]:
+    """列出某房间软删除（回收站）里的文件，按 deleted_at 倒序。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM files WHERE room_hash=? AND deleted=1 ORDER BY deleted_at DESC",
+            (room_hash,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def restore_file(room_hash: str, name: str) -> bool:
+    """从回收站恢复：清 deleted / deleted_at。"""
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE files SET deleted=0, deleted_at=NULL "
+            "WHERE room_hash=? AND name=? AND deleted=1",
             (room_hash, name),
         )
         return cur.rowcount > 0
+
+
+def purge_one(room_hash: str, name: str) -> str | None:
+    """从软删文件里物理删除一条；返回磁盘上的 stored_name 以便调用方 unlink。
+    找不到或已是活的返回 None。"""
+    with _conn() as c:
+        r = c.execute(
+            "SELECT stored_name FROM files WHERE room_hash=? AND name=? AND deleted=1",
+            (room_hash, name),
+        ).fetchone()
+        if not r:
+            return None
+        c.execute("DELETE FROM files WHERE room_hash=? AND name=?", (room_hash, name))
+        return r["stored_name"]
+
+
+def recycle_stats(room_hash: str) -> dict:
+    """某房间回收站：文件数 + 占用字节。"""
+    with _conn() as c:
+        r = c.execute(
+            "SELECT COUNT(*) n, COALESCE(SUM(size),0) s FROM files "
+            "WHERE room_hash=? AND deleted=1",
+            (room_hash,),
+        ).fetchone()
+    return {"count": r["n"], "size": r["s"]}
 
 
 def inc_download(room_hash: str, name: str) -> None:
@@ -218,18 +268,41 @@ def list_rooms() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+RECYCLE_TTL = 30 * 24 * 3600  # 回收站保留 30 天
+
+
 def purge_expired(now: float | None = None) -> int:
-    """物理删除所有已到期文件，返回删除数量。"""
+    """物理删除两类过期：
+      1) expires_at <= now 的活文件（到期未删）
+      2) 软删除超过 RECYCLE_TTL 的（回收站超过 30 天）
+    返回总删除数量。"""
+    from .config import FILES_DIR
+    from .security import ensure_within
     now = now if now is not None else time.time()
     removed = 0
     with _conn() as c:
+        # 1) 到期活文件
         rows = c.execute(
-            "SELECT room_hash, name, stored_name FROM files WHERE expires_at IS NOT NULL AND expires_at<=? AND deleted=0",
+            "SELECT id, room_hash, name, stored_name FROM files "
+            "WHERE expires_at IS NOT NULL AND expires_at<=? AND deleted=0",
             (now,),
         ).fetchall()
         for r in rows:
-            from .config import FILES_DIR
-            from .security import ensure_within
+            try:
+                p = ensure_within(FILES_DIR / r["room_hash"], stored_path(r["room_hash"], r["stored_name"]))
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+            c.execute("DELETE FROM files WHERE id=?", (r["id"],))
+            removed += 1
+        # 2) 回收站 30 天
+        cutoff = now - RECYCLE_TTL
+        rows = c.execute(
+            "SELECT id, room_hash, name, stored_name FROM files "
+            "WHERE deleted=1 AND deleted_at IS NOT NULL AND deleted_at<=?",
+            (cutoff,),
+        ).fetchall()
+        for r in rows:
             try:
                 p = ensure_within(FILES_DIR / r["room_hash"], stored_path(r["room_hash"], r["stored_name"]))
                 p.unlink(missing_ok=True)
