@@ -20,7 +20,10 @@ import subprocess
 import sys
 import tempfile
 import time
-import tomllib
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    import tomli as tomllib  # type: ignore
 import pathlib
 from pathlib import Path
 
@@ -480,14 +483,16 @@ def run_tests(host, port):
     if os.environ.get("ROOM_ADMIN_PW"):
         admin_pw = os.environ["ROOM_ADMIN_PW"]
     else:
-        # 否则等子进程首启写回 config.toml 后再读
-        for _ in range(20):
-            with open(cfg_path, "rb") as f:
-                cfg = tomllib.load(f)
-            admin_pw = cfg.get("admin", {}).get("password", "")
-            if admin_pw and admin_pw != "admin":
-                break
-            time.sleep(0.2)
+        # CI / 本地 fallback：从 env 拿，或等子进程首启写回 config.toml
+        admin_pw = os.environ.get("ROOM_ADMIN_PW", "")
+        if not admin_pw:
+            for _ in range(20):
+                with open(cfg_path, "rb") as f:
+                    cfg = tomllib.load(f)
+                admin_pw = cfg.get("admin", {}).get("password", "")
+                if admin_pw and admin_pw != "admin":
+                    break
+                time.sleep(0.2)
     bs_headers = {"X-Bootstrap-Password": admin_pw,
                   "Content-Type": "application/json"}
     create_body = json.dumps({"name": "smoke-admin", "scope": "admin"})
