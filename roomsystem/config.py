@@ -8,7 +8,10 @@
 """
 from __future__ import annotations
 import os
-import tomllib
+try:
+    import tomllib  # Python 3.11+
+except ImportError:  # 3.10 兼容
+    import tomli as tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 

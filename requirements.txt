@@ -2,3 +2,5 @@ fastapi>=0.110
 uvicorn[standard]>=0.27
 jinja2>=3.1
 python-multipart>=0.0.6
+# Python 3.10 兼容（3.11+ 自带 tomllib）
+tomli>=2.0; python_version < "3.11"

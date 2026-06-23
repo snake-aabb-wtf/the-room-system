@@ -30,6 +30,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # tomli 仅在 <3.11 装（3.11+ tomllib 自带）
+          if [ "$(python -c 'import sys; print(sys.version_info.minor)')" -lt 11 ]; then
+            pip install tomli
+          fi
           # websockets 客户端用于测试实时通道（服务端已含在 uvicorn[standard]）
           pip install websockets
 
