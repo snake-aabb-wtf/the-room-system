@@ -60,13 +60,30 @@ def rh() -> str:
 
 
 # ── HTTP 工具 ──────────────────────────────────
-def req(host, port, method, path, headers=None, body=None, timeout=10):
+def req(host, port, method, path, headers=None, body=None, timeout=10, max_read=None):
     c = http.client.HTTPConnection(host, port, timeout=timeout)
     c.request(method, path, body=body, headers=headers or {})
     r = c.getresponse()
-    data = r.read()
+    if max_read is not None:
+        # 读 N 字节后强制中断（流式响应可能无 Content-Length 不会 EOF）
+        try:
+            data = r.read(max_read)
+        except Exception:
+            data = b""
+        try:
+            r.close()
+        except Exception:
+            pass
+        try:
+            c.close()
+        except Exception:
+            pass
+    else:
+        data = r.read()
+        cookies = r.getheader("set-cookie") or ""
+        c.close()
+        return r.status, data, cookies, dict(r.getheaders())
     cookies = r.getheader("set-cookie") or ""
-    c.close()
     return r.status, data, cookies, dict(r.getheaders())
 
 
@@ -356,6 +373,86 @@ def run_tests(host, port):
                      {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
                      body="name=does_not_exist.txt")
     check("删除不存在文件 200 容忍", s == 200, str(s))
+
+    print("\n=== v2.3.0 网盘基础 ===")
+    # 上传图片，等异步缩略图（轮询最多 5 秒）
+    b = "BNDRY3A"
+    # 1x1 红色 PNG
+    png_bytes = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108020000"
+        "00907753de0000000c4944415478da6300010000000500010d0a2db4"
+        "0000000049454e44ae426082"
+    )
+    s, d, _, _ = req(host, port, "POST", f"/upload/{R}",
+                     {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+                     body=mp("file", "red.png", png_bytes, "image/png", b))
+    up_img = json.loads(d)
+    img_id = up_img.get("id", 0)
+    check("图片上传返回 id", s == 200 and img_id > 0, str(s))
+
+    # 缩略图可能还在生成（轮询）
+    thumb_ok = False
+    for _ in range(20):
+        s, d, _, h = req(host, port, "GET", f"/thumb/{R}/{img_id}", {"Cookie": sess})
+        if s == 200 and d[:2] == b'\xff\xd8':  # JPEG magic
+            thumb_ok = True
+            break
+        time.sleep(0.25)
+    check("图片缩略图生成 JPEG", thumb_ok, f"status={s} len={len(d) if d else 0}")
+
+    # 缩略图鉴权
+    s, _, _, _ = req(host, port, "GET", f"/thumb/{R}/{img_id}")
+    check("缩略图未授权 403", s == 403, str(s))
+
+    # 文件列表含 thumb_status
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    files = json.loads(d)
+    img_entry = next((f for f in files if f["name"] == "red.png"), None)
+    check("文件列表含 thumb_status", img_entry and "thumb_status" in img_entry, "")
+
+    # 上传带 parent_dir
+    b = "BNDRY3B"
+    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"nested.txt\"\r\n\r\n"
+            f"hi\r\n--{b}\r\nContent-Disposition: form-data; name=\"parent_dir\"\r\n\r\n"
+            f"photos/2024\r\n--{b}--\r\n").encode()
+    s, d, _, _ = req(host, port, "POST", f"/upload/{R}",
+                     {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"}, body=body)
+    check("parent_dir 嵌套上传", s == 200, str(s))
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    files = json.loads(d)
+    nested = next((f for f in files if f["name"] == "nested.txt"), None)
+    check("parent_dir 入库正确", nested and nested.get("parent_dir") == "photos/2024", str(nested))
+
+    # parent_dir 安全：.. 段应被清空
+    b = "BNDRY3C"
+    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"safe.txt\"\r\n\r\n"
+            f"x\r\n--{b}\r\nContent-Disposition: form-data; name=\"parent_dir\"\r\n\r\n"
+            f"../etc\r\n--{b}--\r\n").encode()
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"}, body=body)
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    files = json.loads(d)
+    safe = next((f for f in files if f["name"] == "safe.txt"), None)
+    check("parent_dir 路径穿越被清空", safe and (safe.get("parent_dir") or "") == "", str(safe.get("parent_dir")))
+
+    # 批量 zip 下载：先准备几个文件，取 id 列表
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    files = json.loads(d)
+    ids = [str(f["id"]) for f in files[:3]]  # 最多 3 个
+    # zip 是 chunked 流式：加 Connection: close 让服务端发完就 EOF
+    s, d, _, h = req(host, port, "GET", f"/zip/{R}?ids={','.join(ids)}",
+                     {"Cookie": sess, "Connection": "close"})
+    check("批量 zip 下载 200", s == 200, str(s))
+    check("Content-Type 是 zip", h.get("content-type", "").startswith("application/zip"), h.get("content-type"))
+    check("zip 起始 PK 签名", d[:2] == b'PK', d[:4].hex())
+
+    # zip 空 ids 应 400
+    s, _, _, _ = req(host, port, "GET", f"/zip/{R}?ids=", {"Cookie": sess})
+    check("zip 空 ids 400", s == 400, str(s))
+
+    # zip 越权
+    s, _, _, _ = req(host, port, "GET", f"/zip/{R}?ids={','.join(ids)}")
+    check("zip 未授权 403", s == 403, str(s))
 
     print("\n=== WebSocket 实时 (Phase 5) ===")
     try:

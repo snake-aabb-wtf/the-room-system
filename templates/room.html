@@ -28,6 +28,34 @@
 .modal .close-x{position:absolute;top:10px;right:12px;background:none;border:none;color:var(--txt3);font-size:20px;cursor:pointer}
 .modal .close-x:hover{color:var(--txt)}
 .modal{position:relative}
+/* v2.3.0: 缩略图 + 多选 */
+.fico-wrap{width:100%;aspect-ratio:1.5/1;display:flex;align-items:center;justify-content:center;background:var(--bg2);border-radius:6px;overflow:hidden;margin-bottom:6px}
+.fico-wrap .ficon{font-size:48px;line-height:1}
+.fico-wrap .fthumb{width:100%;height:100%;object-fit:cover}
+.fcheck{position:absolute;top:6px;left:6px;z-index:2;background:rgba(0,0,0,.5);border-radius:4px;padding:1px 4px;display:flex}
+.fcheck input{cursor:pointer;width:14px;height:14px;margin:0}
+.fcard{position:relative}
+.fdir{font-size:10px;color:var(--accent);background:var(--bg2);border-radius:3px;padding:1px 5px;align-self:flex-start;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 多选工具栏 */
+.sel-bar{position:sticky;top:64px;z-index:10;background:var(--card2);border:1px solid var(--accent);border-radius:10px;padding:10px 14px;margin-bottom:12px;display:none;align-items:center;gap:10px;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+.sel-bar .sel-info{font-size:13px}
+.sel-bar .sel-info b{color:var(--accent);font-size:15px;margin:0 4px}
+.sel-bar .spacer{flex:1}
+/* 树状视图 */
+.tree{padding:6px 0}
+.tree details{margin-left:14px}
+.tree summary{cursor:pointer;padding:4px 6px;border-radius:4px;font-size:13px;list-style:none}
+.tree summary:hover{background:var(--bg2)}
+.tree summary::before{content:'📁 ';margin-right:4px}
+.tree .leaf{padding:3px 6px 3px 22px;display:flex;align-items:center;gap:8px;font-size:13px;border-radius:4px}
+.tree .leaf:hover{background:var(--bg2)}
+.tree .leaf .fname{flex:1}
+.tree .leaf .sz{color:var(--txt3);font-size:11px}
+/* 视图切换按钮组 */
+.view-toggle{display:inline-flex;gap:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.view-toggle button{background:transparent;border:none;padding:5px 10px;color:var(--txt2);cursor:pointer;font-size:13px;border-right:1px solid var(--border)}
+.view-toggle button:last-child{border-right:none}
+.view-toggle button.on{background:var(--accent2);color:#fff}
 </style>
 </head>
 <body>
@@ -89,11 +117,25 @@
       <option value="size_desc">大到小</option>
       <option value="size_asc">小到大</option>
     </select>
-    <button class="btn small ghost" onclick="toggleView()" id="viewbtn">⊞ 网格</button>
+    <div class="view-toggle" role="group" aria-label="视图">
+      <button id="vbGrid" class="on" onclick="setView('grid')" aria-label="网格">⊞</button>
+      <button id="vbList" onclick="setView('list')" aria-label="列表">☰</button>
+      <button id="vbTree" onclick="setView('tree')" aria-label="树">🌳</button>
+    </div>
+    <button class="btn small ghost" onclick="document.getElementById('dirpicker').click()" title="选择整个文件夹上传">📁 文件夹</button>
+    <input type="file" id="dirpicker" webkitdirectory multiple style="display:none" onchange="onDirPick(this.files)">
+  </div>
+
+  <div class="sel-bar" id="selBar" role="region" aria-label="批量操作">
+    <div class="sel-info">已选 <b id="selCount">0</b> 个文件</div>
+    <div class="spacer"></div>
+    <button class="btn small" onclick="downloadZip()">📦 打包下载</button>
+    <button class="btn small ghost" onclick="clearSel()">取消选择</button>
   </div>
 
   <div class="grid" id="grid"></div>
   <div id="list" style="display:none"></div>
+  <div id="tree" style="display:none"></div>
   <div class="empty" id="empty" style="display:none">
     <div class="big" aria-hidden="true">📂</div>这个房间还没有文件<br><span class="muted">拖个文件上来试试吧</span>
   </div>
@@ -175,7 +217,7 @@ function renderFiles(){
   const q = document.getElementById('q').value.toLowerCase().trim();
   const sort = document.getElementById('sort').value;
   let list = FILES.slice();
-  if(q) list = list.filter(f=>f.name.toLowerCase().includes(q));
+  if(q) list = list.filter(f=>(f.name+' '+(f.parent_dir||'')).toLowerCase().includes(q));
   if(sort==='name') list.sort((a,b)=>a.name.localeCompare(b.name,'zh'));
   else if(sort==='size_desc') list.sort((a,b)=>b.size-a.size);
   else if(sort==='size_asc') list.sort((a,b)=>a.size-b.size);
@@ -183,14 +225,66 @@ function renderFiles(){
 
   const grid=document.getElementById('grid');
   const listEl=document.getElementById('list');
+  const treeEl=document.getElementById('tree');
   const empty=document.getElementById('empty');
-  const target = VIEW==='grid'?grid:listEl;
   grid.style.display = VIEW==='grid'?'':'none';
   listEl.style.display = VIEW==='list'?'':'none';
-  target.innerHTML='';
-  if(!list.length){empty.style.display='block';grid.innerHTML='';listEl.innerHTML='';}
-  else{empty.style.display='none'; list.forEach(f=>target.appendChild(card(f)));}
+  treeEl.style.display = VIEW==='tree'?'':'none';
+  grid.innerHTML=''; listEl.innerHTML=''; treeEl.innerHTML='';
+  if(!list.length){
+    empty.style.display = (CURRENT_TAB==='files')?'block':'none';
+  } else {
+    empty.style.display = 'none';
+    if(VIEW==='tree'){ renderTree(list, treeEl); }
+    else { list.forEach(f=>(VIEW==='grid'?grid:listEl).appendChild(card(f))); }
+  }
   document.getElementById('count').textContent = list.length;
+}
+
+// v2.3.0: 树状视图 —— 按 parent_dir 嵌套
+function renderTree(list, host){
+  // 构树：根 = '' 或 parent_dir 为空的；子 = 父 dir 下的子文件
+  const dirMap = new Map();   // dir path -> {subdirs:Set, files:[]}
+  const root = {subdirs:new Set(), files:[]};
+  dirMap.set('', root);
+  for(const f of list){
+    const dir = f.parent_dir || '';
+    if(!dirMap.has(dir)) dirMap.set(dir, {subdirs:new Set(), files:[]});
+    dirMap.get(dir).files.push(f);
+    // 把每一级 dir 加到其父的 subdirs
+    const parts = dir.split('/').filter(Boolean);
+    for(let i=1; i<=parts.length; i++){
+      const parent = parts.slice(0, i-1).join('/');
+      const child = parts.slice(0, i).join('/');
+      if(!dirMap.has(parent)) dirMap.set(parent, {subdirs:new Set(), files:[]});
+      if(!dirMap.has(child)) dirMap.set(child, {subdirs:new Set(), files:[]});
+      dirMap.get(parent).subdirs.add(child);
+    }
+  }
+  const renderNode = (dir, container) => {
+    const node = dirMap.get(dir);
+    if(!node) return;
+    for(const sub of [...node.subdirs].sort()){
+      const det = document.createElement('details');
+      det.open = true;
+      const sum = document.createElement('summary');
+      const subName = sub.split('/').pop();
+      const cnt = (dirMap.get(sub)?.files.length||0) + [...(dirMap.get(sub)?.subdirs||[])].length;
+      sum.textContent = subName + ' (' + cnt + ')';
+      det.appendChild(sum);
+      renderNode(sub, det);
+      container.appendChild(det);
+    }
+    for(const f of node.files.sort((a,b)=>a.name.localeCompare(b.name))){
+      const leaf = document.createElement('div');
+      leaf.className = 'leaf';
+      leaf.innerHTML = `<span aria-hidden="true">${ICON[f.kind]||'📁'}</span>
+        <a class="fname" href="/dl/${RH}/${encodeURIComponent(f.name)}" target="_blank" style="color:inherit;text-decoration:none">${esc(f.name)}</a>
+        <span class="sz">${f.size_h}</span>`;
+      container.appendChild(leaf);
+    }
+  };
+  renderNode('', host);
 }
 function expBadge(f){
   if(!f.expires_at && f.expires_at!==0) return '';
@@ -203,11 +297,22 @@ function expBadge(f){
 }
 function card(f){
   const el=document.createElement('div');
+  const preview = f.kind!=='file';
+  const checked = SELECTED.has(f.id) ? ' checked' : '';
+  const isImg = f.kind==='image';
+  // 缩略图：仅 image 类型且 thumb_status==='ready' 时显示
+  const thumbHTML = (isImg && f.thumb_status==='ready')
+    ? `<img loading="lazy" src="/thumb/${RH}/${f.id}" alt="" class="fthumb" onerror="this.style.display='none'">`
+    : '';
+  const dirHTML = f.parent_dir ? `<span class="fdir" title="${esc(f.parent_dir)}">📁 ${esc(f.parent_dir.split('/').slice(-2).join('/'))}</span>` : '';
   if(VIEW==='grid'){ el.className='fcard';
-    const preview = f.kind!=='file';
     el.innerHTML = `
-      <div class="ficon" aria-hidden="true">${ICON[f.kind]||'📁'}</div>
+      <label class="fcheck" title="多选打包下载" aria-label="多选">
+        <input type="checkbox" ${checked} onchange="toggleSel(${f.id}, this.checked)">
+      </label>
+      <div class="fico-wrap">${thumbHTML||`<div class="ficon" aria-hidden="true">${ICON[f.kind]||'📁'}</div>`}</div>
       <div class="fname">${esc(f.name)} ${expBadge(f)}</div>
+      ${dirHTML}
       <div class="fmeta"><span>${f.size_h}</span><span>${f.when}</span>${f.dl?`<span>↓${f.dl}</span>`:''}${f.by?`<span>👤${esc(f.by)}</span>`:''}</div>
       <div class="facts">
         ${preview?`<button class="btn small" onclick="preview(${f.id})">预览</button>`:''}
@@ -218,10 +323,13 @@ function card(f){
       </div>`;
   } else {
     el.className='fcard'; el.style.cssText='flex-direction:row;align-items:center;gap:12px;padding:8px 12px';
-    const preview = f.kind!=='file';
     el.innerHTML = `
+      <label class="fcheck" title="多选" aria-label="多选">
+        <input type="checkbox" ${checked} onchange="toggleSel(${f.id}, this.checked)">
+      </label>
       <span style="font-size:20px" aria-hidden="true">${ICON[f.kind]||'📁'}</span>
       <span class="fname" style="flex:1">${esc(f.name)} ${expBadge(f)}</span>
+      ${dirHTML}
       <span class="fmeta"><span>${f.size_h}</span> · ${f.when}${f.dl?` · ↓${f.dl}`:''}</span>
       <div class="facts">
         ${preview?`<button class="btn small" onclick="preview(${f.id})">预览</button>`:''}
@@ -231,15 +339,88 @@ function card(f){
   }
   return el;
 }
-function toggleView(){ VIEW = VIEW==='grid'?'list':'grid';
-  document.getElementById('viewbtn').textContent = VIEW==='grid'?'☰ 列表':'⊞ 网格'; renderFiles(); }
+
+// v2.3.0: 多选打包下载
+const SELECTED = new Set();
+function toggleSel(id, on){
+  if(on) SELECTED.add(id); else SELECTED.delete(id);
+  updateSelBar();
+}
+function updateSelBar(){
+  const n = SELECTED.size;
+  const bar = document.getElementById('selBar');
+  document.getElementById('selCount').textContent = n;
+  bar.style.display = n>0 ? 'flex' : 'none';
+}
+function clearSel(){ SELECTED.clear(); document.querySelectorAll('.fcheck input').forEach(c=>c.checked=false); updateSelBar(); }
+function downloadZip(){
+  if(SELECTED.size===0) return;
+  const ids = [...SELECTED].join(',');
+  const url = `/zip/${RH}?ids=${ids}`;
+  // 用临时 a 触发下载
+  const a = document.createElement('a');
+  a.href = url; a.download = '';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast.success('已开始打包下载 ' + SELECTED.size + ' 个文件');
+  clearSel();
+}
+function setView(v){
+  VIEW = v;
+  document.getElementById('vbGrid').className = v==='grid'?'on':'';
+  document.getElementById('vbList').className = v==='list'?'on':'';
+  document.getElementById('vbTree').className = v==='tree'?'on':'';
+  renderFiles();
+}
+function toggleView(){ setView(VIEW==='grid'?'list':'grid'); }
 function filterFiles(){renderFiles();}
 
 let UPLOAD_TTL = "";
 window.UPLOAD_TTL = '';   // UQ 读这个
 function onPick(files){ UQ.enqueue(files, RH); }
+function onDirPick(files){
+  // 把每个文件的 webkitRelativePath 拆出 parent_dir，然后包成一个个独立 XHR
+  // UQ 不支持逐项带 parent_dir，这里改用一个简化版的顺序上传
+  if(!files || !files.length) return;
+  const list = Array.from(files);
+  let i = 0;
+  const next = () => {
+    if(i>=list.length){ toast.success('文件夹上传完成，共 '+list.length+' 个文件'); return; }
+    const f = list[i++];
+    const dir = (f.webkitRelativePath || f.name).split('/').slice(0,-1).join('/');
+    uploadOneWithDir(f, dir, next);
+  };
+  next();
+}
+function uploadOneWithDir(file, dir, cb){
+  // 简单 XHR，无并发控制（文件夹上传本身是手动操作）
+  const id = 'uq' + Date.now() + (++window._uid || (window._uid=1));
+  const host = document.getElementById('queue');
+  const row = document.createElement('div');
+  row.className = 'uq-item';
+  row.innerHTML = `<div class="uq-name"><span class="fname">${esc(file.name)}</span>
+    <span class="tiny stat"></span></div>
+    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i style="width:0%"></i></div>`;
+  host.appendChild(row);
+  const bar = row.querySelector('.bar > i');
+  const stat = row.querySelector('.stat');
+  const xhr = new XMLHttpRequest();
+  const fd = new FormData(); fd.append('file', file); fd.append('ttl', window.UPLOAD_TTL||''); fd.append('parent_dir', dir);
+  xhr.upload.onprogress = e => { if(e.lengthComputable){ bar.style.width = (e.loaded/e.total*100)+'%'; stat.textContent = Math.round(e.loaded/e.total*100)+'%'; } };
+  xhr.onload = () => {
+    if(xhr.status===200){
+      const d = JSON.parse(xhr.responseText);
+      bar.style.width='100%'; row.querySelector('.bar').className='bar ok'; stat.textContent='✓';
+      FILES.unshift({id:Date.now(),name:d.name,size:d.size,size_h:d.size_h,ext:'',kind:kindOf(d.name),when:justNow(),dl:0,by:MY_NICK,created_at:Date.now()/1000,parent_dir:d.parent_dir||''});
+      renderFiles();
+      setTimeout(()=>row.remove(),1200);
+    } else { stat.textContent='失败'; row.querySelector('.bar').className='bar err'; }
+    if(cb) cb();
+  };
+  xhr.onerror = () => { stat.textContent='网络错误'; row.querySelector('.bar').className='bar err'; if(cb) cb(); };
+  xhr.open('POST', '/upload/'+RH); xhr.send(fd);
+}
 function onUploadComplete(d, file){
-  FILES.unshift({id:Date.now(),name:d.name,size:d.size,size_h:d.size_h,ext:'',kind:kindOf(d.name),when:justNow(),dl:0,by:MY_NICK,created_at:Date.now()/1000,expires_at:UPLOAD_TTL?Date.now()/1000+parseFloat(UPLOAD_TTL)*3600:0});
+  FILES.unshift({id:Date.now(),name:d.name,size:d.size,size_h:d.size_h,ext:'',kind:kindOf(d.name),when:justNow(),dl:0,by:MY_NICK,created_at:Date.now()/1000,expires_at:UPLOAD_TTL?Date.now()/1000+parseFloat(UPLOAD_TTL)*3600:0,parent_dir:d.parent_dir||'',thumb_status:'none'});
   renderFiles();
   toast.success('已上传 '+d.name);
 }

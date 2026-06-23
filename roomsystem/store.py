@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS files (
     created_at   REAL NOT NULL,
     expires_at   REAL DEFAULT NULL,           -- 到期时间戳（Phase 5）
     dl_count     INTEGER DEFAULT 0,           -- 下载次数（Phase 4 统计）
-    deleted_at   REAL DEFAULT NULL            -- 软删除时间（v2.2.0 回收站，30 天保留）
+    deleted_at   REAL DEFAULT NULL,           -- 软删除时间（v2.2.0 回收站，30 天保留）
+    parent_dir   TEXT DEFAULT '',              -- 相对目录（v2.3.0 文件夹）
+    thumb_status TEXT DEFAULT 'none'           -- none/ready/failed (v2.3.0 缩略图)
 );
 CREATE INDEX IF NOT EXISTS idx_files_room ON files(room_hash);
 
@@ -112,13 +114,14 @@ def room_exists(room_hash: str) -> bool:
 
 # ── 文件 ──────────────────────────────────────────
 def add_file(room_hash: str, name: str, stored_name: str, size: int, ext: str,
-             uploaded_by: str = "", expires_at: float | None = None) -> int:
+             uploaded_by: str = "", expires_at: float | None = None,
+             parent_dir: str = "") -> int:
     now = time.time()
     with _conn() as c:
         cur = c.execute(
-            """INSERT INTO files(room_hash,name,stored_name,size,ext,uploaded_by,created_at,expires_at)
-               VALUES(?,?,?,?,?,?,?,?)""",
-            (room_hash, name, stored_name, size, ext, uploaded_by, now, expires_at),
+            """INSERT INTO files(room_hash,name,stored_name,size,ext,uploaded_by,created_at,expires_at,parent_dir)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (room_hash, name, stored_name, size, ext, uploaded_by, now, expires_at, parent_dir),
         )
         return cur.lastrowid
 
@@ -140,6 +143,31 @@ def get_file(room_hash: str, name: str) -> dict | None:
             (room_hash, name),
         ).fetchone()
         return dict(r) if r else None
+
+
+def get_file_by_id(file_id: int) -> dict | None:
+    """按 id 查文件（用于 /thumb/{rh}/{id} 路由，id 不可枚举查名）。"""
+    with _conn() as c:
+        r = c.execute("SELECT * FROM files WHERE id=? AND deleted=0", (file_id,)).fetchone()
+        return dict(r) if r else None
+
+
+def set_thumb_status(file_id: int, status: str) -> None:
+    with _conn() as c:
+        c.execute("UPDATE files SET thumb_status=? WHERE id=?", (status, file_id))
+
+
+def get_files_by_ids(file_ids: list[int]) -> list[dict]:
+    """批量按 id 取文件，保留传入顺序。zip 路由用。"""
+    if not file_ids:
+        return []
+    with _conn() as c:
+        qmarks = ",".join("?" * len(file_ids))
+        rows = c.execute(
+            f"SELECT * FROM files WHERE id IN ({qmarks}) AND deleted=0", file_ids
+        ).fetchall()
+    by_id = {r["id"]: dict(r) for r in rows}
+    return [by_id[i] for i in file_ids if i in by_id]
 
 
 def rename_file(room_hash: str, old_name: str, new_name: str, new_stored: str) -> bool:

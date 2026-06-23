@@ -163,6 +163,9 @@ The room hash is the first 16 chars of sha256(password). You rarely need it — 
 - 🆕 **ETA estimate** ("2 min 30 sec left")
 - 🆕 **FIFO upload order** (doesn't steal focus)
 - 🆕 **Drop overlay flicker fix**
+- 🆕 **Image thumbnails** (Pillow auto-generates 256px JPEG)
+- 🆕 **Folder upload** (preserves directory structure + tree view)
+- 🆕 **Multi-select bulk download** (zipstream-ng streaming zip)
 
 </details>
 
@@ -187,6 +190,7 @@ The room hash is the first 16 chars of sha256(password). You rarely need it — 
 - Full audit log persisted
 - One-click room purge
 - 🆕 **Recycle bin**: soft-delete with 30-day retention, restore or permanently delete
+- 🆕 **Optional deps**: Pillow (thumbnails) / zipstream-ng (bulk download) / ffmpeg (video thumbnails, optional)
 
 </details>
 

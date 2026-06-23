@@ -175,27 +175,51 @@ def api_files(rh: str, request: Request):
     if current_room(request) != rh:
         raise HTTPException(403)
     files = store.list_files(rh)
-    return [{"name": f["name"], "size": f["size"], "ext": f["ext"], "dl": f["dl_count"]} for f in files]
+    return [{
+        "id": f["id"],
+        "name": f["name"],
+        "size": f["size"],
+        "ext": f["ext"],
+        "dl": f["dl_count"],
+        "parent_dir": f.get("parent_dir") or "",
+        "thumb_status": f.get("thumb_status") or "none",
+    } for f in files]
 
 
 @router.post("/upload/{rh}")
-async def upload(rh: str, request: Request, file: UploadFile = File(...), ttl: str = Form(default="")):
+async def upload(rh: str, request: Request, file: UploadFile = File(...), ttl: str = Form(default=""),
+                  parent_dir: str = Form(default="")):
     if current_room(request) != rh:
         raise HTTPException(403)
     expires_at = _ttl_to_ts(ttl)
     safe = clean_name(file.filename or "unnamed")
     ext = _ext(safe)
+    # 清洗 parent_dir：禁止路径分隔符/穿越，最多 100 字符
+    pdir = (parent_dir or "").replace("\\", "/").strip().strip("/")
+    for seg in pdir.split("/") if pdir else []:
+        if seg in ("", ".", ".."):
+            pdir = ""  # 任何可疑段一律清空
+            break
+    pdir = pdir[:100]
     dest_dir = FILES_DIR / rh
     dest = unique_path(dest_dir, safe)
     ensure_within(dest_dir, dest)
-    # 流式写盘，先拿到 UploadFile 的文件对象
+    # 流式写盘
     size = save_stream(file.file, dest, CONFIG.max_file_size or 0)
     nick = request.cookies.get("nick", "")
-    store.add_file(rh, safe, dest.name, size, ext,
-                   uploaded_by=nick, expires_at=expires_at)
+    file_id = store.add_file(rh, safe, dest.name, size, ext,
+                             uploaded_by=nick, expires_at=expires_at, parent_dir=pdir)
     store.audit(rh, request.client.host if request.client else "", "upload", f"{safe} ({_fmt_size(size)})")
     await realtime.broadcast(rh, {"type": "upload", "name": safe, "size": size, "by": nick})
-    return {"ok": True, "name": safe, "size": size, "size_h": _fmt_size(size)}
+    # v2.3.0 异步生成缩略图（不阻塞响应）
+    try:
+        from . import thumbs
+        await thumbs.generate_async(file_id, rh, dest.name, ext)
+    except Exception as e:
+        import logging
+        logging.getLogger("thumbs").warning("schedule failed: %s", e)
+    return {"ok": True, "name": safe, "size": size, "size_h": _fmt_size(size),
+            "id": file_id, "parent_dir": pdir}
 
 
 @router.post("/upload/{rh}/raw")
@@ -290,6 +314,71 @@ async def delete(rh: str, request: Request, name: str = File(...)):
     store.audit(rh, request.client.host if request.client else "", "delete", name)
     await realtime.broadcast(rh, {"type": "delete", "name": name})
     return {"ok": ok}
+
+
+# ── Phase v2.3.0: 缩略图 + 批量下载 zip + 目录树 ──
+@router.get("/thumb/{rh}/{file_id}")
+def get_thumb(rh: str, file_id: int, request: Request):
+    """返回已生成的缩略图。若未就绪返回 202，前端用占位图。"""
+    if current_room(request) != rh and not is_admin(request):
+        raise HTTPException(403)
+    f = store.get_file_by_id(file_id)
+    if not f or f["room_hash"] != rh:
+        raise HTTPException(404, "文件不存在")
+    from .thumbs import thumb_path_or_none
+    p = thumb_path_or_none(rh, file_id)
+    if not p:
+        # 触发一次生成（懒加载）
+        try:
+            from . import thumbs as _t
+            import asyncio
+            asyncio.create_task(_t.generate_async(file_id, rh, f["stored_name"], f["ext"]))
+        except Exception:
+            pass
+        raise HTTPException(202, "缩略图生成中")
+    return StreamingResponse(iter_chunks(p, 0, p.stat().st_size - 1),
+                             media_type="image/jpeg",
+                             headers={"Cache-Control": "public, max-age=86400"})
+
+
+@router.get("/zip/{rh}")
+def zip_download(rh: str, ids: str, request: Request):
+    """批量下载：?ids=1,2,3 流式 zip，不落临时文件。"""
+    if current_room(request) != rh and not is_admin(request):
+        raise HTTPException(403)
+    try:
+        id_list = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(400, "ids 参数非法")
+    if not id_list or len(id_list) > 500:
+        raise HTTPException(400, "ids 数量应在 1-500")
+    files = store.get_files_by_ids(id_list)
+    if not files:
+        raise HTTPException(404, "无有效文件")
+    # 全部必须属于该房间（get_files_by_ids 不校验房间，单独过滤）
+    files = [f for f in files if f["room_hash"] == rh]
+    if not files:
+        raise HTTPException(404, "无该房间的文件")
+
+    import zipstream
+    zf = zipstream.ZipStream(compress_type=zipstream.ZIP_DEFLATED)
+    seen = set()  # 防同 stored_name（罕见）冲突
+    for f in files:
+        safe = f["name"]
+        if safe in seen:
+            continue
+        seen.add(safe)
+        p = ensure_within(FILES_DIR / rh, store.stored_path(rh, f["stored_name"]))
+        if not p.exists():
+            continue
+        # parent_dir 前缀
+        arc = (f.get("parent_dir") or "") + safe
+        zf.add(str(p), arcname=arc)
+
+    zip_name = f"the-room-{rh[:8]}-{int(time.time())}.zip"
+    return StreamingResponse(zf, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{zip_name}"',
+    })
 
 
 # ── Phase v2.2.0: 回收站 ──────────────────────────
