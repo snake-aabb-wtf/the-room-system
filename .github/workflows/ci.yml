@@ -36,6 +36,8 @@ jobs:
           fi
           # websockets 客户端用于测试实时通道（服务端已含在 uvicorn[standard]）
           pip install websockets
+          # v3.0.0 final: trs CLI / SDK 包
+          pip install -e trs/
 
       - name: Run smoke test
         run: python tests/test_smoke.py
@@ -45,3 +47,6 @@ jobs:
           ROOM_PORT: "0"  # 测试脚本忽略实际端口
           ROOM_DATA_DIR: ${{ runner.temp }}/room_ci
           ROOM_ADMIN_PW: ci_admin_pw
+
+      - name: Run trs CLI / SDK integration test
+        run: python tests/test_cli.py

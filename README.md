@@ -249,7 +249,128 @@ def handle(request):
     ...
 ```
 
-> 💡 **下一步**：v3.0.0 final 加 CLI `trs` + Python SDK。
+> 💡 **下一步**：v3.0.0 final 加 CLI `trs` + Python SDK。✅ **已交付** — 见下节。
+
+### 4e. v3.0.0 final：官方 CLI `trs` + Python SDK
+
+告别 `curl -H "Authorization: Bearer …"`！`v3.0.0 final` 把所有 v3 端点打包成：
+
+- **Python SDK**：`pip install trs`，`from trs import TrsClient`。
+- **CLI**：`pip install trs`，得到 `trs` 可执行文件。
+
+#### 安装
+
+```bash
+# 仓库根目录下，trs/ 是已发布的 Python 包
+pip install -e trs/
+
+# 或从 GitHub Release 直接装
+pip install https://github.com/snake-aabb-wtf/the-room-system/releases/download/v3.0.0/trs-0.1.0-py3-none-any.whl
+```
+
+#### 1. 冷启动：bootstrap 第一个 token
+
+CLI 可以在没有现成 token 的情况下，用管理员口令创建第一个 token，并自动保存到 `~/.config/theroom/config.toml` 的 `default` profile：
+
+```bash
+# 管理员口令来自 server 端首启日志（或环境变量 ROOM_ADMIN_PW）
+trs auth bootstrap --password "$ROOM_ADMIN_PW" \
+                   --name "ops-initial" \
+                   --base-url http://192.168.1.10:3005
+# → 自动写入 profile `default`，后续 trs 命令无需再带 --token
+```
+
+#### 2. 常用命令速查
+
+| 场景 | 命令 |
+| --- | --- |
+| 列所有 token | `trs auth list --json` |
+| 建 user scope token | `trs auth create --name "ci-deploy" --scope user` |
+| 吊销 token | `trs auth revoke 7` |
+| 全局统计 | `trs rooms stats` |
+| 列房间 | `trs rooms list` |
+| 看审计 | `trs rooms audit --per-page 20 --action upload` |
+| 上传 | `trs files upload <room> ./big.zip` |
+| 列文件 | `trs files list <room> --ext pdf --sort size` |
+| 重命名 | `trs files rename <room> 42 new_name.pdf` |
+| 软删/恢复/永久删 | `trs files delete <room> 42` / `restore` / `purge` |
+| 批量操作 | `trs files batch <room> delete 1 2 3 4` |
+| 回收站 | `trs files recycle list <room>` / `trs files recycle empty <room>` |
+| 预签下载 | `trs files download <room> 42 ./out.bin` |
+| 创 webhook | `trs webhook create https://hooks.example/room --secret xxxx --event file.uploaded` |
+| 投递历史 | `trs webhook logs 1` |
+| 多 profile | `trs --profile staging files list <room>` |
+
+所有命令都支持 `--json` 输出裸 JSON 方便脚本拼接，失败返回非 0 退出码 + stderr 错误描述。
+
+#### 3. Python SDK
+
+```python
+import asyncio
+from trs import TrsClient, TrsError
+
+async def main():
+    async with TrsClient("http://192.168.1.10:3005", token="trs_xxx") as cli:
+        # 流式遍历一个房间所有文件（自动分页）
+        async for f in cli.iter_files("<room>", q="report", ext="pdf"):
+            print(f["id"], f["name"], f["size_h"])
+
+        # 预签下载
+        await cli.download_presigned("<room>", 42, dest="./big.bin")
+
+        # 改 token 名/到期
+        await cli.patch_token(7, name="ci-deploy-v2")
+        await cli.revoke_token(8)
+
+        # Webhook CRUD
+        wh = await cli.create_webhook(
+            "https://hooks.example/room",
+            name="ci-backup",
+            secret="super-secret-1234",
+            events=["file.uploaded", "file.deleted"],
+        )
+        print("created webhook", wh["id"])
+        for d in await cli.webhook_deliveries(wh["id"]):
+            print(d["event"], d["status_code"], d.get("error") or "ok")
+
+asyncio.run(main())
+```
+
+错误会抛 `TrsError(status=…, body=…, response=…)`，可针对 `status` 字段做精细处理。
+
+#### 4. 配置文件
+
+`trs` 第一次写 token 时会在 `~/.config/theroom/config.toml`（Windows: `%APPDATA%\theroom\config.toml`）创建文件并 `chmod 600`：
+
+```toml
+default = "default"
+
+[profile.default]
+base_url = "http://192.168.1.10:3005"
+token = "trs_xxxxxxxx"
+room_cookie = "room_session=xxxxx"   # 可选；让 CLI 也能调文件上传/留言/分享
+
+[profile.staging]
+base_url = "https://room-staging.example.com"
+token = "trs_yyyyyyyy"
+```
+
+环境变量优先级：命令行参数 > 环境变量（`TRS_BASE_URL` / `TRS_TOKEN` / `TRS_API_KEY` / `TRS_PROFILE` / `TRS_CONFIG`）> 配置文件。
+
+#### 5. CI 里跑 `trs`
+
+GitHub Actions / GitLab CI 一行：
+
+```yaml
+- run: |
+    pip install trs
+    trs auth bootstrap --password "$ROOM_ADMIN_PW" --base-url "$ROOM_URL"
+    trs files upload "$ROOM" ./dist/artifact.zip
+    trs rooms audit --per-page 5
+```
+
+> 详细子命令清单：`trs --help` / `trs <cmd> --help`。
+
 
 ### 5. 快速试用
 

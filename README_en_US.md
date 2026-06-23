@@ -249,7 +249,128 @@ def handle(request):
     ...
 ```
 
-> 💡 **Next**: v3.0.0 final adds CLI `trs` + Python SDK.
+> 💡 **Next**: v3.0.0 final adds CLI `trs` + Python SDK. ✅ **Shipped** — see below.
+
+### 4e. v3.0.0 final: official CLI `trs` + Python SDK
+
+No more `curl -H "Authorization: Bearer …"`! `v3.0.0 final` packages every v3 endpoint as:
+
+- **Python SDK**: `pip install trs`, then `from trs import TrsClient`.
+- **CLI**: `pip install trs` and you get the `trs` executable.
+
+#### Install
+
+```bash
+# From the repo root - the trs/ directory is a published Python package
+pip install -e trs/
+
+# Or grab the wheel straight from the GitHub Release
+pip install https://github.com/snake-aabb-wtf/the-room-system/releases/download/v3.0.0/trs-0.1.0-py3-none-any.whl
+```
+
+#### 1. Cold start: bootstrap your first token
+
+The CLI can mint the very first admin token using the admin password (no existing token needed) and persist it to `~/.config/theroom/config.toml` under the `default` profile:
+
+```bash
+# Admin password comes from the server startup log (or env var ROOM_ADMIN_PW)
+trs auth bootstrap --password "$ROOM_ADMIN_PW" \
+                   --name "ops-initial" \
+                   --base-url http://192.168.1.10:3005
+# → Saved to profile `default`; subsequent trs commands need no --token
+```
+
+#### 2. Common commands
+
+| Task | Command |
+| --- | --- |
+| List all tokens | `trs auth list --json` |
+| Create a user-scope token | `trs auth create --name "ci-deploy" --scope user` |
+| Revoke a token | `trs auth revoke 7` |
+| Global stats | `trs rooms stats` |
+| List rooms | `trs rooms list` |
+| Audit log | `trs rooms audit --per-page 20 --action upload` |
+| Upload | `trs files upload <room> ./big.zip` |
+| List files | `trs files list <room> --ext pdf --sort size` |
+| Rename | `trs files rename <room> 42 new_name.pdf` |
+| Soft-delete / restore / purge | `trs files delete <room> 42` / `restore` / `purge` |
+| Batch | `trs files batch <room> delete 1 2 3 4` |
+| Recycle bin | `trs files recycle list <room>` / `trs files recycle empty <room>` |
+| Presigned download | `trs files download <room> 42 ./out.bin` |
+| Create webhook | `trs webhook create https://hooks.example/room --secret xxxx --event file.uploaded` |
+| Delivery log | `trs webhook logs 1` |
+| Multiple profiles | `trs --profile staging files list <room>` |
+
+Every command supports `--json` for raw output. On error you get a non-zero exit code and a `trs: …` message on stderr.
+
+#### 3. Python SDK
+
+```python
+import asyncio
+from trs import TrsClient, TrsError
+
+async def main():
+    async with TrsClient("http://192.168.1.10:3005", token="trs_xxx") as cli:
+        # Stream every file in a room, paging transparently
+        async for f in cli.iter_files("<room>", q="report", ext="pdf"):
+            print(f["id"], f["name"], f["size_h"])
+
+        # Presigned download
+        await cli.download_presigned("<room>", 42, dest="./big.bin")
+
+        # Rename / expire / revoke a token
+        await cli.patch_token(7, name="ci-deploy-v2")
+        await cli.revoke_token(8)
+
+        # Webhook CRUD
+        wh = await cli.create_webhook(
+            "https://hooks.example/room",
+            name="ci-backup",
+            secret="super-secret-1234",
+            events=["file.uploaded", "file.deleted"],
+        )
+        print("created webhook", wh["id"])
+        for d in await cli.webhook_deliveries(wh["id"]):
+            print(d["event"], d["status_code"], d.get("error") or "ok")
+
+asyncio.run(main())
+```
+
+Errors raise `TrsError(status=…, body=…, response=…)` — branch on `.status` for fine-grained handling.
+
+#### 4. Config file
+
+The first `trs auth bootstrap` creates `~/.config/theroom/config.toml` (Windows: `%APPDATA%\theroom\config.toml`) with `chmod 600`:
+
+```toml
+default = "default"
+
+[profile.default]
+base_url = "http://192.168.1.10:3005"
+token = "trs_xxxxxxxx"
+room_cookie = "room_session=xxxxx"   # optional; lets the CLI also call upload/messages/share
+
+[profile.staging]
+base_url = "https://room-staging.example.com"
+token = "trs_yyyyyyyy"
+```
+
+Resolution order: CLI flags > env vars (`TRS_BASE_URL` / `TRS_TOKEN` / `TRS_API_KEY` / `TRS_PROFILE` / `TRS_CONFIG`) > config file.
+
+#### 5. Use `trs` in CI
+
+GitHub Actions / GitLab CI in one line:
+
+```yaml
+- run: |
+    pip install trs
+    trs auth bootstrap --password "$ROOM_ADMIN_PW" --base-url "$ROOM_URL"
+    trs files upload "$ROOM" ./dist/artifact.zip
+    trs rooms audit --per-page 5
+```
+
+> Full subcommand list: `trs --help` / `trs <cmd> --help`.
+
 
 ### 5. Quick try
 
