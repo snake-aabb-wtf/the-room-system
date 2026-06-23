@@ -477,7 +477,6 @@ def run_tests(host, port):
 
     # 用 admin token 调 list（先创建一个 token）
     # 用 X-Bootstrap-Password（=admin_password）跳过需要 admin token 才能创建 token 的循环
-    import tomllib, pathlib
     cfg_path = pathlib.Path(__file__).resolve().parent.parent / "config.toml"
     # 优先用环境变量（与子进程一致）；子进程也读 ROOM_ADMIN_PW
     if os.environ.get("ROOM_ADMIN_PW"):
@@ -493,6 +492,7 @@ def run_tests(host, port):
                 if admin_pw and admin_pw != "admin":
                     break
                 time.sleep(0.2)
+    # tomllib 顶部已 import（3.10 用 tomli fallback）
     bs_headers = {"X-Bootstrap-Password": admin_pw,
                   "Content-Type": "application/json"}
     create_body = json.dumps({"name": "smoke-admin", "scope": "admin"})
