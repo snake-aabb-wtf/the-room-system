@@ -67,6 +67,40 @@ CREATE TABLE IF NOT EXISTS shares (
     label        TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_shares_room ON shares(room_hash);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    token        TEXT UNIQUE NOT NULL,        -- 32 字符随机（URL-safe base64）
+    name         TEXT NOT NULL,               -- "CI 脚本"、"我的手机"
+    scope        TEXT NOT NULL,               -- 逗号分隔 "admin,user,readonly"
+    room_hash    TEXT,                        -- NULL=全局 token；非空=绑定某房间
+    created_at   REAL NOT NULL,
+    expires_at   REAL,                        -- NULL=永不过期
+    revoked      INTEGER DEFAULT 0,
+    last_used_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token);
+
+CREATE TABLE IF NOT EXISTS webhooks (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT,
+    url           TEXT NOT NULL,
+    secret        TEXT NOT NULL,              -- 用户给的 secret，签名用
+    events        TEXT NOT NULL,              -- 逗号分隔 "file.uploaded,file.deleted,..."
+    room_hash     TEXT,                      -- NULL=全局
+    active        INTEGER DEFAULT 1,
+    created_at    REAL NOT NULL,
+    last_fired_at REAL,
+    fail_count    INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    webhook_id   INTEGER NOT NULL,
+    event        TEXT NOT NULL,
+    status_code  INTEGER,
+    response_body TEXT,
+    ts           REAL NOT NULL
+);
 """
 
 
@@ -383,3 +417,85 @@ def resolve_share(token: str) -> str | None:
         if r["expires_at"] and r["expires_at"] < time.time():
             return None
         return r["room_hash"]
+
+
+# ── Phase v3.0: API Token 系统 ───────────────────
+import secrets as _secrets
+
+
+def _new_token() -> str:
+    """生成 32 字符 URL-safe token。"""
+    return _secrets.token_urlsafe(24)
+
+
+def create_api_token(name: str, scope: str, room_hash: str | None = None,
+                     expires_at: float | None = None,
+                     token: str | None = None) -> dict:
+    """创建 API token。返回包含明文 token（仅此一次返回）。"""
+    token = token or _new_token()
+    now = time.time()
+    with _conn() as c:
+        cur = c.execute(
+            """INSERT INTO api_tokens(token,name,scope,room_hash,created_at,expires_at)
+               VALUES(?,?,?,?,?,?)""",
+            (token, name, scope, room_hash, now, expires_at),
+        )
+        tid = cur.lastrowid
+    return {"id": tid, "token": token, "name": name, "scope": scope,
+            "room_hash": room_hash, "expires_at": expires_at,
+            "created_at": now, "revoked": 0}
+
+
+def get_api_token(token: str) -> dict | None:
+    """查 token 记录（含 revoked / expires_at 字段，调用方负责校验）。"""
+    with _conn() as c:
+        r = c.execute("SELECT * FROM api_tokens WHERE token=?", (token,)).fetchone()
+        return dict(r) if r else None
+
+
+def list_api_tokens(include_revoked: bool = True) -> list[dict]:
+    """列所有 token（不带 token 字段本身）。"""
+    with _conn() as c:
+        q = "SELECT id,name,scope,room_hash,created_at,expires_at,revoked,last_used_at FROM api_tokens"
+        if not include_revoked:
+            q += " WHERE revoked=0"
+        q += " ORDER BY created_at DESC"
+        rows = c.execute(q).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["expires_h"] = (time.strftime("%Y-%m-%d %H:%M", time.localtime(d["expires_at"]))
+                              if d["expires_at"] else "永久")
+            d["last_used_h"] = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(d["last_used_at"]))
+                                 if d["last_used_at"] else "-")
+            out.append(d)
+        return out
+
+
+def revoke_api_token(token_id: int) -> bool:
+    with _conn() as c:
+        cur = c.execute("UPDATE api_tokens SET revoked=1 WHERE id=?", (token_id,))
+        return cur.rowcount > 0
+
+
+def touch_api_token(token_id: int) -> None:
+    """更新 last_used_at（异步更新，不阻塞主请求）。"""
+    with _conn() as c:
+        c.execute("UPDATE api_tokens SET last_used_at=? WHERE id=?", (time.time(), token_id))
+
+
+def update_api_token(token_id: int, name: str | None = None,
+                     expires_at: float | None = -1) -> bool:
+    """更新 token 字段。expires_at=-1 表示不变，None 表示永久。"""
+    sets, args = [], []
+    if name is not None:
+        sets.append("name=?"); args.append(name)
+    if expires_at != -1:
+        sets.append("expires_at=?"); args.append(expires_at)
+    if not sets:
+        return False
+    args.append(token_id)
+    with _conn() as c:
+        cur = c.execute(f"UPDATE api_tokens SET {','.join(sets)} WHERE id=?", args)
+        return cur.rowcount > 0
+

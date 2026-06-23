@@ -139,6 +139,56 @@ curl -OJ http://你的IP:3005/raw/房间hash/文件名
 
 ---
 
+## 🆕 v3.0.0 — API 全覆盖（首批 v3.0.0-rc.1）
+
+**v3 大版本，主题：让 curl / 脚本 / 第三方集成 100% 能用。**
+
+### 1. API Token 鉴权
+- 双 header 支持：`Authorization: Bearer xxx` **或** `X-API-Key: xxx`
+- Token 范围：`admin` / `user` / `readonly`，可多选逗号分隔
+- Token 可绑房间（限定访问范围）
+- Token 有期限、可吊销、可多个同时有效
+- 首启自动生成 admin token（控制台打印 + `data/rooms.db` 存）
+- 冷启动支持 `X-Bootstrap-Password` header 创建第一个 token（无现有 token 时）
+
+### 2. RFC 7807 Problem Details 错误格式
+- 所有 `/api/v3/*` 端点统一返回 `application/problem+json`
+- 字段：`type` / `title` / `status` / `detail` / `instance` / `trace_id` / `timestamp`
+- 客户端可编程解析；服务端每次响应附 `trace_id` 方便排查
+
+### 3. 旧路径加 Deprecation header
+- 旧路径（`/upload/`、`/delete/`、`/api/{rh}/` 等）响应加：
+  - `Deprecation: true`
+  - `Sunset: 2026-12-31`
+  - `Link: <...api/v3>; rel="successor-version"`
+- v3.1 之后移除旧路径；6 个月过渡期
+
+### 4. v3 端点首批（`/api/v3/auth/tokens`）
+- `GET  /api/v3/auth/tokens` —— 列出所有 token（admin scope）
+- `POST /api/v3/auth/tokens` —— 创建新 token（**仅此一次返回明文 token**）
+- `GET  /api/v3/auth/tokens/{id}` —— 单个 token 详情
+- `PATCH /api/v3/auth/tokens/{id}` —— 改 name/expires_at
+- `DELETE /api/v3/auth/tokens/{id}` —— 吊销
+
+> 💡 **后续阶段**：v3.0.0-rc2 补 PATCH/批量/查询增强/审计分页，rc3 加预签名 URL + WebHook。
+
+### 5. 快速试用
+```bash
+# 1. 拿首启生成的 admin token（控制台日志里找）
+TOKEN="xxx..."
+
+# 2. 列 token
+curl -H "Authorization: Bearer $TOKEN" http://你的IP:3005/api/v3/auth/tokens
+
+# 3. 建一个新 token
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"ci-deploy","scope":"user"}' \
+  http://你的IP:3005/api/v3/auth/tokens
+```
+
+---
+
 ## ✨ 完整功能
 
 <details>

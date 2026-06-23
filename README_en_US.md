@@ -139,6 +139,56 @@ The room hash is the first 16 chars of sha256(password). You rarely need it — 
 
 ---
 
+## 🆕 v3.0.0 — API coverage (v3.0.0-rc.1 first release)
+
+**v3 major version. Theme: make curl / scripts / third-party integration 100% usable.**
+
+### 1. API Token authentication
+- Dual header support: `Authorization: Bearer xxx` **or** `X-API-Key: xxx`
+- Token scopes: `admin` / `user` / `readonly`, comma-separated multi-value
+- Tokens can be bound to a specific room
+- Tokens have expiration, can be revoked, multiple can coexist
+- First-run auto-generates an admin token (printed to console + stored in `data/rooms.db`)
+- Cold-start supports `X-Bootstrap-Password` header to mint the first token (when no tokens exist yet)
+
+### 2. RFC 7807 Problem Details error format
+- All `/api/v3/*` endpoints return `application/problem+json`
+- Fields: `type` / `title` / `status` / `detail` / `instance` / `trace_id` / `timestamp`
+- Programmatically parseable; every response carries `trace_id` for debugging
+
+### 3. Deprecation header on old paths
+- Old paths (`/upload/`, `/delete/`, `/api/{rh}/`, etc.) now respond with:
+  - `Deprecation: true`
+  - `Sunset: 2026-12-31`
+  - `Link: <...api/v3>; rel="successor-version"`
+- v3.1 will remove old paths; 6-month migration window
+
+### 4. First v3 endpoints (`/api/v3/auth/tokens`)
+- `GET  /api/v3/auth/tokens` — list all tokens (admin scope)
+- `POST /api/v3/auth/tokens` — create new token (**plaintext returned only this once**)
+- `GET  /api/v3/auth/tokens/{id}` — single token details
+- `PATCH /api/v3/auth/tokens/{id}` — update name / expires_at
+- `DELETE /api/v3/auth/tokens/{id}` — revoke
+
+> 💡 **Upcoming**: v3.0.0-rc2 adds PATCH / batch / query / audit pagination; rc3 adds presigned URLs + WebHooks.
+
+### 5. Quick try
+```bash
+# 1. Grab the auto-generated admin token (find it in startup console logs)
+TOKEN="xxx..."
+
+# 2. List tokens
+curl -H "Authorization: Bearer $TOKEN" http://YOUR_IP:3005/api/v3/auth/tokens
+
+# 3. Create a new token
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"ci-deploy","scope":"user"}' \
+  http://YOUR_IP:3005/api/v3/auth/tokens
+```
+
+---
+
 ## ✨ Full feature list
 
 <details>

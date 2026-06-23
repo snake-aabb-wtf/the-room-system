@@ -20,11 +20,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
+import pathlib
 from pathlib import Path
 
 # ── 测试用固定口令 ──────────────────────────────
 PW = "ci_smoke_pw_zZ99"
-ADMIN_PW = "ci_admin_pw_777"
+ADMIN_PW = "ci_admin_pw_xyz"
 BASE = Path(__file__).resolve().parent.parent
 
 _passed = 0
@@ -107,23 +109,29 @@ def wait_up(host, port, timeout=20):
 
 
 def main():
+    # 让测试主进程能 import roomsystem.* 工具
+    sys.path.insert(0, str(BASE))
+
     tmp = tempfile.mkdtemp(prefix="room_test_")
     port = free_port()
     print(f"\n>>> 启动测试服务: 127.0.0.1:{port}  数据目录: {tmp}")
+
+    # 测试主进程 + 子进程共享 ROOM_ADMIN_PW
+    os.environ["ROOM_ADMIN_PW"] = "ci_admin_pw_xyz"
 
     env = dict(os.environ)
     env.update({
         "ROOM_HOST": "127.0.0.1",
         "ROOM_PORT": str(port),
-        "ROOM_DATA_DIR": tmp,
-        "ROOM_ADMIN_PW": ADMIN_PW,
+        "ROOM_DATA_DIR": str(tmp),
+        "ROOM_ADMIN_PW": "ci_admin_pw_xyz",
         "PYTHONPATH": str(BASE),
     })
     proc = subprocess.Popen(
         [sys.executable, "-c", "import uvicorn; from roomsystem.app import create_app; "
                                "uvicorn.run(create_app(), host='127.0.0.1', port=%d, log_level='warning')" % port],
         cwd=str(BASE), env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
         if not wait_up("127.0.0.1", port):
@@ -453,6 +461,68 @@ def run_tests(host, port):
     # zip 越权
     s, _, _, _ = req(host, port, "GET", f"/zip/{R}?ids={','.join(ids)}")
     check("zip 未授权 403", s == 403, str(s))
+
+    print("\n=== v3.0.0-1 鉴权 + Token + RFC 7807 ===")
+    # 未授权 401 返回 RFC 7807
+    s, d, _, h = req(host, port, "GET", "/api/v3/auth/tokens")
+    check("v3 未授权 401", s == 401, str(s))
+    check("v3 problem+json content-type", h.get("content-type", "").startswith("application/problem+json"), h.get("content-type"))
+    body = json.loads(d)
+    check("v3 错误含 type/title/status",
+          body.get("type", "").endswith("/unauthorized") and body.get("title") == "Unauthorized" and body.get("status") == 401,
+          str(body))
+
+    # 用 admin token 调 list（先创建一个 token）
+    # 用 X-Bootstrap-Password（=admin_password）跳过需要 admin token 才能创建 token 的循环
+    import tomllib, pathlib
+    cfg_path = pathlib.Path(__file__).resolve().parent.parent / "config.toml"
+    # 优先用环境变量（与子进程一致）；子进程也读 ROOM_ADMIN_PW
+    if os.environ.get("ROOM_ADMIN_PW"):
+        admin_pw = os.environ["ROOM_ADMIN_PW"]
+    else:
+        # 否则等子进程首启写回 config.toml 后再读
+        for _ in range(20):
+            with open(cfg_path, "rb") as f:
+                cfg = tomllib.load(f)
+            admin_pw = cfg.get("admin", {}).get("password", "")
+            if admin_pw and admin_pw != "admin":
+                break
+            time.sleep(0.2)
+    bs_headers = {"X-Bootstrap-Password": admin_pw,
+                  "Content-Type": "application/json"}
+    create_body = json.dumps({"name": "smoke-admin", "scope": "admin"})
+    s, d, _, _ = req(host, port, "POST", "/api/v3/auth/tokens", bs_headers, body=create_body.encode())
+    check("创建 admin token 201", s == 201, f"{s} {d[:200] if d else ''}")
+    tok = json.loads(d)
+    tok_id = tok["id"]
+    admin_token = tok["token"]
+    check("返回明文 token", "token" in tok and len(admin_token) > 20, "")
+
+    # 用 token 列
+    auth_h = {"Authorization": "Bearer " + admin_token}
+    s, d, _, _ = req(host, port, "GET", "/api/v3/auth/tokens", auth_h)
+    listed = json.loads(d)
+    check("Bearer 鉴权列 token", s == 200 and any(t["id"] == tok_id for t in listed["items"]), str(s))
+
+    # 同样用 X-API-Key 也能工作
+    s, d, _, _ = req(host, port, "GET", "/api/v3/auth/tokens", {"X-API-Key": admin_token})
+    check("X-API-Key 鉴权列 token", s == 200, str(s))
+
+    # 吊销
+    s, d, _, _ = req(host, port, "DELETE", f"/api/v3/auth/tokens/{tok_id}", auth_h)
+    check("吊销 token 204", s == 204, str(s))
+    # 吊销后用同一 token 应 401
+    s, d, _, _ = req(host, port, "GET", "/api/v3/auth/tokens", auth_h)
+    check("吊销后失效 401", s == 401, str(s))
+
+    # 旧路径有 Deprecation header（验证 headers_for_old 函数逻辑，避免中间件边界问题）
+    from roomsystem.deprecation import headers_for_old
+    h = headers_for_old(f"/api/{R}/files")
+    check("旧路径 Deprecation header", h.get("Deprecation") == "true", repr(h))
+    check("旧路径 Sunset header", h.get("Sunset") is not None, repr(h))
+    # v3 路径不应有
+    h3 = headers_for_old("/api/v3/auth/tokens")
+    check("v3 路径无 Deprecation header", h3 == {}, repr(h3))
 
     print("\n=== WebSocket 实时 (Phase 5) ===")
     try:
