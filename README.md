@@ -4,14 +4,16 @@
 
 ### 一个口令，一个房间，万物秒传。
 
-**The snappiest way to beam files across your local network.**  
-No accounts. No cloud. No limits. Just a password and a browser.
+**局域网内最快的文件传送门。**  
+无需账号 · 不上云 · 没有体积限制 · 一个口令加一个浏览器就够了。
+
+🌐 其他语言：[English](README_en_US.md)
 
 ---
 
 </div>
 
-> 🇨🇳 [中文](#-中文介绍) ｜ 🇺🇸 [English](#-english)
+> 💡 这是一个轻量、私密、即开即用的局域网文件共享系统。
 
 ---
 
@@ -53,7 +55,7 @@ No accounts. No cloud. No limits. Just a password and a browser.
 
 - 🔑 **零门槛** —— 不用注册、不用装 App、不用配服务器。打开网页就能用，**连你奶奶都会**。
 - 🚀 **极速** —— 局域网直连，千兆带宽跑满。2GB 视频？拖进去就传完了。
-- 🎬 **即传即看** —— 视频不用等下载，**边传边拖进度条播放**。Markdown/代码/PDF/图片全部在线预览。
+- 🎬 **即传即看** —— 视频不用等下载，**边传边拖进度条播放**。Markdown / 代码 / PDF / 图片全部在线预览。
 - 🔒 **私密** —— 文件不出局域网，口令不进 URL，**你的数据永远在你自己的机器上**。
 - ♾️ **无限制** —— 没有云盘的体积墙，没有微信的压缩，**10GB 单文件？50GB？照传不误**。
 - 📱 **全平台** —— 手机、平板、PC、Mac、Linux，**有浏览器就行**。
@@ -61,9 +63,24 @@ No accounts. No cloud. No limits. Just a password and a browser.
 
 ---
 
-## 🇨🇳 中文介绍
+## 📑 目录
 
-### 🚀 30 秒启动
+- [💥 为什么你今天就需要它](#-为什么你今天就需要它)
+- [⚡ 三秒看懂](#-三秒看懂)
+- [🌟 核心卖点](#-核心卖点)
+- [🚀 30 秒启动](#-30-秒启动)
+- [📖 怎么用](#-怎么用)
+- [✨ 完整功能](#-完整功能)
+- [⚙️ 配置](#️-配置)
+- [🛠️ 管理后台](#️-管理后台)
+- [🔒 安全说明](#-安全说明)
+- [📂 项目结构](#-项目结构)
+- [❓ 常见问题](#-常见问题)
+- [🎯 现在就用](#-现在就用)
+
+---
+
+## 🚀 30 秒启动
 
 需要 Python 3.10+（推荐 3.12）。
 
@@ -72,7 +89,7 @@ python -m pip install -r requirements.txt   # 只需一次
 python run.py
 ```
 
-启动后控制台会告诉你地址、和管理员口令：
+启动后控制台会告诉你访问地址和管理员口令：
 
 ```
 ======================================================
@@ -84,7 +101,9 @@ python run.py
 
 任何同局域网的设备，浏览器打开这个地址就能用。
 
-### 📖 怎么用
+---
+
+## 📖 怎么用
 
 **传文件给别人：**
 1. 打开网址，输入一个口令（或点「随机创建房间」），进入房间
@@ -101,9 +120,23 @@ python run.py
 - 🔗 **分享链接** —— 生成可转发、**可吊销**的链接
 - ⏰ **到期文件** —— 传完设个有效期，到期自动消失
 - 💬 **实时留言** —— 房间内所有人消息秒到
-- ⌨️ **命令行** —— `curl -T 文件 http://IP:3000/upload/房间/raw` 极客友好
+- ⌨️ **命令行** —— 极客友好，见下方
 
-### ✨ 完整功能
+### 命令行传文件（curl）
+
+```bash
+# 上传
+curl -T 大视频.mp4 http://你的IP:3005/upload/房间hash/raw -H "X-Filename: 大视频.mp4"
+
+# 下载
+curl -OJ http://你的IP:3005/raw/房间hash/文件名
+```
+
+房间 hash 是 sha256(口令) 的前 16 位。一般不用记，浏览器里直接操作更方便。
+
+---
+
+## ✨ 完整功能
 
 <details>
 <summary><b>📁 体验类（点击展开）</b></summary>
@@ -113,7 +146,7 @@ python run.py
 - 即时搜索 + 4 种排序
 - 重命名 / 软删除
 - 网格 / 列表双视图
-- 自动探测所有局域网 IP（**WiFi/网线切换不失联**）
+- 自动探测所有局域网 IP（**WiFi / 网线切换不失联**）
 - 一键复制地址 + 二维码
 
 </details>
@@ -153,46 +186,9 @@ python run.py
 
 ---
 
-## 🇺🇸 English
+## ⚙️ 配置
 
-### 🚀 30-second start
-
-Requires Python 3.10+ (3.12 recommended).
-
-```bash
-python -m pip install -r requirements.txt   # once
-python run.py
-```
-
-The console prints your LAN address and an auto-generated admin password. Open that URL from **any device on the same Wi-Fi**. Done.
-
-### How it works
-
-1. Open the URL → type any password (or click "random room")
-2. **Drag a file in** → it uploads in a flash
-3. Tell the other person the password → they open the same URL and grab it
-
-**Advanced:**
-- 📟 QR codes for instant mobile access
-- 🔗 Revocable share links with optional TTL
-- ⏰ Self-destructing files (set expiry, auto-cleanup)
-- 💬 Real-time room chat (WebSocket)
-- ⌨️ `curl -T file http://IP:3000/upload/<room>/raw` — CLI friendly
-
-### Why not the alternatives?
-
-| Need | Cloud drive | WeChat / AirDrop | **The Room System** |
-|------|-------------|------------------|---------------------|
-| 2GB video to a coworker | Slow upload | Blocked / size cap | **Instant, no limit** ✅ |
-| Privacy | Hits a server | Hits a server | **Stays on your LAN** ✅ |
-| Preview before download | Sometimes | No | **Stream + seek instantly** ✅ |
-| Cost | Subscription | Free but capped | **Free forever, no caps** ✅ |
-
----
-
-## ⚙️ 配置 / Configuration
-
-Everything lives in `config.toml` — delete it and defaults still work.
+所有配置都在 `config.toml`，删掉也能用默认值跑。
 
 ```toml
 [server]
@@ -200,97 +196,103 @@ host = "0.0.0.0"
 port = 3005
 
 [storage]
-max_file_size = 53687091200   # 单文件上限（字节）/ per-file cap in bytes, 0=unlimited
+# 单文件上限（字节），0 = 不限制
+max_file_size = 53687091200
 
-[rooms.preset]                # 预置房间：名字 → 口令 / preset rooms: name → password
+[rooms.preset]
+# 预置房间：名字 → 口令。口令是你口头告诉对方的钥匙。
+# 任意非预置口令也会即时创建一个临时房间。
 agnes = "agnes2024"
 
 [admin]
-password = "your-admin-password"
+# 留空或写成 "admin"，首次启动会自动生成随机口令并打印到控制台，
+# 同时写回本文件。你也可以直接在这里填一个自己的。
+password = ""
 ```
 
-Edit, then `python run.py` again.
+改完重启 `python run.py` 生效。
 
 ---
 
-## 🛠️ 管理后台 / Admin Dashboard
+## 🛠️ 管理后台
 
-`http://你的IP:3000/admin` → enter the admin password (printed on first launch, stored in `config.toml [admin]`).
+打开 `http://你的IP:3005/admin`，输入管理员口令（首次启动控制台打印的那个，在 `config.toml [admin]` 里可改）。
 
-- 📊 **Stats** — rooms / files / total size / downloads / messages
-- 🏠 **Rooms** — per-room file count, size, last active; nuke with one click
-- 📋 **Audit log** — every login / upload / download / delete, time-stamped
-- 🧹 **Cleanup** — manually purge expired files (auto-runs every 5 min anyway)
-
----
-
-## 🔒 安全 / Security
-
-Built for **LAN / trusted-circle** use. Hardened by default:
-
-| Threat | Protection |
-|--------|-----------|
-| Path traversal (`../../etc/passwd`) | `ensure_within()` rejects any escape — returns 404 |
-| Password in URL | Login sets a cookie session; URLs contain only a one-way hash |
-| "Any password opens any room" | Strict preset match or explicit room creation |
-| Memory blow-up on big files | Streaming 1MB chunks, never loads whole file |
-| XSS via Markdown / messages | All user content escaped before rendering |
-| Unauthorized admin / WebSocket access | 403 / 4403 across the board |
-
-**Not designed for direct public exposure.** For remote access, use a VPN or SSH tunnel, or put a reverse proxy with HTTPS in front.
+功能：
+- 📊 **统计概览** —— 房间数 / 文件数 / 总占用 / 下载数 / 留言数
+- 🏠 **房间列表** —— 每房间的文件数、占用、最后活跃时间；可一键清空
+- 📋 **审计日志** —— 所有登录、上传、下载、删除操作的时间线
+- 🧹 **过期清理** —— 手动触发扫描（系统每 5 分钟也会自动清理到期文件）
 
 ---
 
-## 📂 项目结构 / Project Structure
+## 🔒 安全说明
+
+本系统面向**局域网 / 熟人**场景。已内置防护：
+
+| 威胁 | 防护措施 |
+|------|---------|
+| 路径穿越（`../../etc/passwd`） | `ensure_within()` 校验，任何逃逸一律返回 404 |
+| 口令出现在 URL | 登录后用 cookie session，URL 只含单向 hash |
+| 「任意口令进任意房间」 | 严格匹配预置房间，或显式创建临时房间 |
+| 大文件吃爆内存 | 流式分块读写（1MB），从不整文件载入内存 |
+| Markdown / 留言里的 XSS | 所有用户内容渲染前转义 |
+| 未授权访问管理后台 / WebSocket | 全程 403 / 4403 拒绝 |
+
+**不建议**直接暴露到公网。如需远程访问，请走 VPN 或 SSH 隧道，或自行加反向代理 + HTTPS。
+
+---
+
+## 📂 项目结构
 
 ```
 The Room system/
-├── run.py                  # 🚀 启动入口 / entry point
+├── run.py                  # 🚀 启动入口
 ├── requirements.txt
-├── config.toml             # ⚙️ 配置 / config
-├── roomsystem/             # 后端 / backend
-│   ├── app.py              #   FastAPI 应用工厂 / app factory
-│   ├── config.py           #   配置加载 / config loader
-│   ├── store.py            #   SQLite 持久层 / persistence
-│   ├── auth.py             #   认证 / authentication
-│   ├── security.py         #   路径清洗 + 逃逸检测 / path safety
-│   ├── streaming.py        #   流式上传下载 + Range / streaming + range
-│   ├── net.py              #   局域网 IP 探测 / LAN IP discovery
-│   ├── realtime.py         #   WebSocket 广播 / WS broadcast
-│   ├── cleanup.py          #   过期清理任务 / expiry cleanup
-│   └── routes.py           #   所有路由 / all routes
-├── templates/              # 页面 / pages
+├── config.toml             # ⚙️ 配置
+├── roomsystem/             # 后端
+│   ├── app.py              #   FastAPI 应用工厂
+│   ├── config.py           #   配置加载
+│   ├── store.py            #   SQLite 持久层
+│   ├── auth.py             #   认证
+│   ├── security.py         #   路径清洗 + 逃逸检测
+│   ├── streaming.py        #   流式上传下载 + Range
+│   ├── net.py              #   局域网 IP 探测
+│   ├── realtime.py         #   WebSocket 广播
+│   ├── cleanup.py          #   过期清理任务
+│   └── routes.py           #   所有路由
+├── templates/              # 页面
 │   ├── login.html · room.html · admin.html · share.html
 ├── static/style.css
-└── data/                   # 自动生成 / auto-generated
+└── data/                   # 自动生成，勿手动改
     ├── rooms.db
     └── files/
 ```
 
 ---
 
-## ❓ 常见问题 / FAQ
+## ❓ 常见问题
 
-**Q: 端口被占 / Port in use?**  
-`run.py` auto-detects the conflict and tells you the PID to kill, or change `port` in `config.toml`.
+**Q：端口被占怎么办？**  
+`run.py` 会自动检测并提示占用进程的 PID。要么 `taskkill /pid 那个PID /f`，要么改 `config.toml` 的 `port`。
 
-**Q: 手机连不上 / Phone can't connect?**  
-Same Wi-Fi, use the `192.168.x.x:3005` address (not localhost), allow port 3005 through your firewall.
+**Q：手机连不上？**  
+确认手机和电脑在**同一 WiFi**，用控制台打印的 `192.168.x.x:3005` 地址（不是 localhost）。电脑防火墙需放行 3005 端口。
 
-**Q: 换了 WiFi 地址变了 / IP changed after switching networks?**  
-No problem — it re-detects all IPs on every launch and shows every working address in the UI.
+**Q：换了 WiFi / 插了网线地址变了？**  
+没问题。系统每次启动都重新探测所有 IP，房间页也会显示当前所有可用地址。
 
-**Q: 重启后数据还在吗 / Does data survive restart?**  
-Yes — rooms and files live in SQLite + disk. Only browser sessions reset (re-enter the password).
+**Q：重启服务后数据还在吗？**  
+在。房间和文件存在 SQLite + 磁盘里，重启不丢；但**浏览器会话**会失效，需要重新输口令进入。
 
-**Q: 怎么彻底重置 / How to fully reset?**  
-Delete the `data/` directory and restart.
+**Q：怎么彻底重置？**  
+删掉 `data/` 目录后重启即可（文件和房间元数据全清）。
 
 ---
 
 <div align="center">
 
-## 🎯 现在就用 / Try it now
+## 🎯 现在就用
 
 ```bash
 git clone https://github.com/snake-aabb-wtf/the-room-system.git
@@ -300,12 +302,11 @@ python run.py
 ```
 
 **然后打开浏览器，拖个文件进去。就这么简单。**
-**Then open your browser and drop in a file. It's that simple.**
 
 ---
 
 ⭐ 觉得好用？给个 Star 让更多人看到。
-**Like it? Drop a ⭐ so others find it too.**
 
-*Made for people who just want their files to **get there**, fast.*
+*献给所有「只求文件赶紧传过去」的人。*
+
 </div>
