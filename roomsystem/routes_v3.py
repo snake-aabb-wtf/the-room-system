@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from . import store
+from .config import CONFIG, FILES_DIR
 from .auth_token import auth_layer, _parse_scopes, _VALID_SCOPES
 from .errors import problem, bad_request, not_found, forbidden
 
@@ -334,6 +335,65 @@ def admin_cleanup_v3(request: Request):
     auth_layer(request, need="admin")
     n = store.purge_expired()
     return {"ok": True, "removed": n}
+
+
+# ── v3.0.0-rc.3: 预签名 URL（HMAC 短时下载/上传）──
+from . import presign as _presign
+from .security import ensure_within, clean_name
+import mimetypes
+
+
+@router.get("/rooms/{rh}/presign")
+def make_presign(rh: str, request: Request,
+                 file_id: int, op: str = "get", ttl: int = 300):
+    """v3 鉴权后调用：生成短时预签名 URL。
+
+    返回 {url, sig, exp, ttl}。url 形如
+    /api/v3/dl_presign/{rh}/{fid}?sig=...&exp=...&op=get
+    任何人拿这个 URL 都能在 ttl 秒内下载该文件（无需 auth header）。
+    """
+    auth_layer(request, need="user", room=rh)
+    if op not in ("get",):
+        return bad_request("op must be 'get' (upload presign is not yet supported)")
+    if ttl < 1 or ttl > 86400:  # 1s ~ 24h
+        return bad_request("ttl must be between 1 and 86400 seconds")
+    f = store.get_file_by_id(file_id)
+    if not f or f["room_hash"] != rh or f.get("deleted"):
+        return not_found("file not found")
+    sig, exp = _presign.sign(rh, file_id, op="get", ttl_seconds=ttl)
+    url = f"/api/v3/dl_presign/{rh}/{file_id}?sig={sig}&exp={int(exp)}&op={op}"
+    return {"url": url, "sig": sig, "exp": exp, "ttl": ttl, "op": op,
+            "file_id": file_id, "name": f["name"]}
+
+
+@router.get("/dl_presign/{rh}/{fid}")
+def dl_presign(rh: str, fid: int, request: Request,
+               sig: str = "", exp: float = 0, op: str = "get"):
+    """免鉴权下载：HMAC 验签通过即流式返回文件。"""
+    ok, reason = _presign.verify(rh, fid, op, exp, sig)
+    if not ok:
+        from .errors import problem
+        if reason == "expired":
+            return problem(410, "Gone", "presigned URL expired", "expired",
+                         {"deprecation": "false"})
+        return problem(403, "Forbidden", f"presigned URL invalid: {reason}", "bad-signature")
+    f = store.get_file_by_id(fid)
+    if not f or f["room_hash"] != rh or f.get("deleted"):
+        return not_found("file not found")
+    p = ensure_within(FILES_DIR / rh, store.stored_path(rh, f["stored_name"]))
+    if not p.exists():
+        return not_found("file missing on disk")
+    size = p.stat().st_size
+    mt, _ = mimetypes.guess_type(str(p))
+    headers = {
+        "Content-Disposition": f'attachment; filename="{f["name"]}"',
+        "Content-Length": str(size),
+    }
+    from fastapi.responses import StreamingResponse
+    from .streaming import iter_chunks
+    return StreamingResponse(iter_chunks(p, 0, size - 1),
+                             media_type=mt or "application/octet-stream",
+                             headers=headers)
 
 
 # import 一些 Pydantic 在 v3 tokens 段也用到，这里集中 import

@@ -192,7 +192,32 @@ curl -OJ http://你的IP:3005/raw/房间hash/文件名
 - `GET /api/v3/admin/audit` —— 审计分页 + 过滤（`action`/`room_hash`/`ip`/`since`/`before`）
 - `POST /api/v3/admin/cleanup` —— 触发清理
 
-> 💡 **后续**：rc3 加预签名 URL（HMAC 签名短时下载链接）；rc4 加 WebHook（事件订阅 + HMAC 投递）。
+### 4c. rc.3 增补：预签名 URL（HMAC 短时下载链接）
+
+**杀手锏**：单条 `curl URL -o file` 就能下载文件，**无需任何 auth header**，链接过期自动 410。
+
+- `GET /api/v3/rooms/{rh}/presign?file_id=X&op=get&ttl=300`（需 v3 token 鉴权）
+  - 返回 `{url, sig, exp, ttl}`，`url` 形如 `/api/v3/dl_presign/{rh}/{fid}?sig=...&exp=...&op=get`
+  - `ttl` 范围：1~86400 秒
+- `GET /api/v3/dl_presign/{rh}/{fid}?sig=...&exp=...&op=get`（**免鉴权**）
+  - HMAC-SHA256 验签通过即流式下载
+  - 过期 → 410 Gone；签名错 → 403
+  - 签名内容：`HMAC(secret, "room|file_id|op|exp")`；secret 启动时随机生成
+  - **无状态**：服务端不存签名，重启不影响未过期 URL
+
+**用法**：
+```bash
+# 服务端：拿签名 URL（需 token）
+SIGNED=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://IP:3005/api/v3/rooms/abc.../presign?file_id=42&ttl=300" | jq -r .url)
+
+# 客户端：直接下载（无需任何 header）
+curl "$SIGNED" -o file.bin       # 单条命令搞定！
+```
+
+> 💡 **后续**：rc4 加 WebHook（事件订阅 + HMAC 投递）；final 加 CLI `trs` + Python SDK。
+
+### 5. 快速试用
 
 ### 5. 快速试用
 

@@ -650,6 +650,66 @@ def run_tests(host, port):
     s, d, _, _ = req(host, port, "GET", f"/api/v3/rooms/{R}/recycle", auth_h2)
     check("回收站 empty 后清空", json.loads(d)["pagination"]["total"] == 0, "")
 
+    print("\n=== v3.0.0-rc.3 预签名 URL (HMAC) ===")
+    # 先上传一个文件供下载
+    b = "BNDRYPR"
+    req(host, port, "POST", f"/upload/{R}",
+        {"Cookie": sess, "Content-Type": f"multipart/form-data; boundary={b}"},
+        body=mp("file", "presign_target.txt", b"hello presign download", boundary=b))
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/files", {"Cookie": sess})
+    fl = json.loads(d)
+    pid = next(f["id"] for f in fl if f["name"] == "presign_target.txt")
+
+    # 1) 鉴权调 presign 生成 URL
+    s, d, _, _ = req(host, port, "GET",
+                     f"/api/v3/rooms/{R}/presign?file_id={pid}&op=get&ttl=300",
+                     auth_h2)
+    check("presign 生成 200", s == 200, str(s))
+    presign = json.loads(d)
+    check("presign 返回 url/sig/exp", all(k in presign for k in ("url", "sig", "exp")), str(presign))
+    check("presign url 格式正确",
+          presign["url"].startswith(f"/api/v3/dl_presign/{R}/{pid}"),
+          presign["url"])
+    check("presign exp 在未来 250~350s 内", 250 <= (presign["exp"] - time.time()) <= 350, str(presign["exp"]))
+
+    # 2) 免鉴权 curl 下载（关键场景！不需要任何 auth header）
+    s, d, _, h = req(host, port, "GET", presign["url"])  # 无 cookie，无 token
+    check("presign URL 下载 200", s == 200, str(s))
+    check("presign 下载内容正确", d == b"hello presign download", repr(d))
+
+    # 3) 修改签名 → 应 403
+    bad_url = presign["url"].replace(presign["sig"], "a" * 64)
+    s, d, _, _ = req(host, port, "GET", bad_url)
+    check("presign 签名错误 403", s == 403, str(s))
+
+    # 4) 修改 file_id → 应 403（验签 room|file_id 绑定）
+    if pid + 1 < 99999:
+        bad_url2 = presign["url"].replace(f"/{pid}?", f"/{pid+1}?")
+        s, d, _, _ = req(host, port, "GET", bad_url2)
+        check("presign 文件ID错误 403", s == 403, str(s))
+
+    # 5) 过期 URL → 410
+    # 自己用 presign.sign 算一个过期的 URL（直接调底层避免再起一次签名）
+    from roomsystem.presign import sign, verify
+    exp_past = int(time.time()) - 10
+    msg = f"{R}|{pid}|get|{exp_past}".encode()
+    import hashlib, hmac as _hmac
+    from roomsystem.presign import get_secret
+    sig_past = _hmac.new(get_secret(), msg, hashlib.sha256).hexdigest()
+    past_url = f"/api/v3/dl_presign/{R}/{pid}?sig={sig_past}&exp={exp_past}&op=get"
+    s, d, _, _ = req(host, port, "GET", past_url)
+    check("presign 过期 410", s == 410, str(s))
+
+    # 6) TTL 越界（>86400）→ 400
+    s, d, _, _ = req(host, port, "GET",
+                     f"/api/v3/rooms/{R}/presign?file_id={pid}&ttl=999999",
+                     auth_h2)
+    check("presign ttl 越界 400", s == 400, str(s))
+
+    # 7) 未授权调 presign → 401
+    s, d, _, _ = req(host, port, "GET", f"/api/v3/rooms/{R}/presign?file_id={pid}")
+    check("presign 未授权 401", s == 401, str(s))
+
     print("\n=== WebSocket 实时 (Phase 5) ===")
     try:
         import websockets

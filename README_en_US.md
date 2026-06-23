@@ -192,7 +192,32 @@ The room hash is the first 16 chars of sha256(password). You rarely need it — 
 - `GET /api/v3/admin/audit` — audit paged + filtered (`action` / `room_hash` / `ip` / `since` / `before`)
 - `POST /api/v3/admin/cleanup` — trigger cleanup
 
-> 💡 **Upcoming**: rc3 adds presigned URLs (HMAC-signed short-lived download links); rc4 adds WebHooks (event subscription + HMAC delivery).
+### 4c. rc.3: presigned URLs (HMAC short-lived download links)
+
+**Killer feature**: a single `curl URL -o file` downloads the file, **no auth header needed**, links auto-expire with 410.
+
+- `GET /api/v3/rooms/{rh}/presign?file_id=X&op=get&ttl=300` (v3 token auth required)
+  - Returns `{url, sig, exp, ttl}`. `url` looks like `/api/v3/dl_presign/{rh}/{fid}?sig=...&exp=...&op=get`
+  - `ttl` range: 1..86400 seconds
+- `GET /api/v3/dl_presign/{rh}/{fid}?sig=...&exp=...&op=get` (**no auth required**)
+  - HMAC-SHA256 signature verified → streams the file
+  - Expired → 410 Gone; bad signature → 403
+  - Signature content: `HMAC(secret, "room|file_id|op|exp")`; secret random on startup
+  - **Stateless**: server stores no signatures, restarts don't affect live URLs
+
+**Usage**:
+```bash
+# Server: get signed URL (needs token)
+SIGNED=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://YOUR_IP:3005/api/v3/rooms/abc.../presign?file_id=42&ttl=300" | jq -r .url)
+
+# Client: download directly (no headers needed)
+curl "$SIGNED" -o file.bin       # one command, done!
+```
+
+> 💡 **Upcoming**: rc4 adds WebHooks (event subscription + HMAC delivery); final adds CLI `trs` + Python SDK.
+
+### 5. Quick try
 
 ### 5. Quick try
 ```bash
