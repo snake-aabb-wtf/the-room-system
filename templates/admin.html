@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>管理后台 · The Room</title>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/toast.css">
 <style>
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px}
 .stat{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
@@ -105,19 +106,8 @@ function renderAudit(audit){
       <td class="audit-body tiny">${esc(a.detail||'')}</td>
     </tr>`).join('');
 }
-function cleanupNow(){
-  if(!confirm('立即扫描并删除所有已到期文件？'))return;
-  fetch('/admin/api/cleanup',{method:'POST'}).then(r=>r.json()).then(d=>{
-    alert('已清理 '+d.removed+' 个过期文件'); loadDash();
-  });
-}
-function nuke(rh){
-  if(!confirm('物理清空此房间所有文件？不可恢复！'))return;
-  if(!confirm('再次确认：这会永久删除该房间的全部文件。'))return;
-  fetch(`/admin/api/room/${rh}/nuke`,{method:'POST'}).then(r=>r.json()).then(d=>{
-    alert('已删除 '+d.removed+' 个文件'); loadDash();
-  });
-}
+function cleanupNow(){ adminCleanupAsk(); }
+function nuke(rh){ adminNukeAsk(rh); }
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 // 预置骨架后立即填充
@@ -139,6 +129,26 @@ document.getElementById('dash').innerHTML=`
 loadDash();
 setInterval(loadDash, 15000);
 {% endif %}
+</script>
+<script src="/static/toast.js"></script>
+<script src="/static/error.js"></script>
+<script>
+// 替换 alert/confirm
+window.alert=function(m){toast.info(m);};
+async function adminCleanupAsk(){
+  if(!await modalConfirm({title:'清理过期文件',body:'将立即扫描并物理删除所有已到期文件，不可撤销。继续？',confirmText:'清理',danger:true}))return;
+  try{const d=await(await fetch('/admin/api/cleanup',{method:'POST'})).json();
+    toast.success('已清理 '+d.removed+' 个过期文件');loadDash();
+  }catch(e){}
+}
+async function adminNukeAsk(rh){
+  if(!await modalConfirm({title:'⚠️ 清空房间',body:'将永久删除该房间所有文件，不可恢复！',confirmText:'永久清空',danger:true}))return;
+  if(!await modalConfirm({title:'再次确认',body:'最后再问一次：这会删掉所有文件。',confirmText:'确认清空',danger:true}))return;
+  try{const d=await(await fetch('/admin/api/room/'+rh+'/nuke',{method:'POST'})).json();
+    toast.success('已删除 '+d.removed+' 个文件');loadDash();
+  }catch(e){}
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 </script>
 </body>
 </html>

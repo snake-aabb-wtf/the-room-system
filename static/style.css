@@ -132,3 +132,28 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent)}
   .grid{grid-template-columns:1fr}
   .topbar{padding:12px 14px}
 }
+
+/* ── v2.1.0 A11Y ── */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.btn:focus-visible,.copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.fcard:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.lb-close:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.dropzone:focus-visible{outline:2px dashed var(--accent);outline-offset:6px}
+.dropzone{position:relative}
+/* 聊天自己/别人区分 */
+.chat .msg{display:flex;flex-direction:column;max-width:78%;padding:6px 10px;border-radius:10px;background:var(--bg2)}
+.chat .msg .when{margin-left:0;margin-top:2px}
+.chat .msg.me{align-self:flex-end;background:var(--accent2);color:#fff}
+.chat .msg.me .who,.chat .msg.me .when{color:rgba(255,255,255,.85)}
+.chat .msg.sys{align-self:center;background:transparent;color:var(--txt3);font-style:italic;font-size:12px;max-width:100%}
+.chat .msgs{display:flex;flex-direction:column;gap:8px}
+/* 新消息未读按钮 */
+.chat .newbar{position:sticky;bottom:0;left:0;right:0;text-align:center;margin:6px 0 0}
+.chat .newbar button{background:var(--accent2);color:#fff;border:none;padding:5px 14px;border-radius:14px;font-size:12px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+.chat .newbar button:hover{background:var(--accent-d)}
+.chat .newbar[hidden]{display:none}
+/* 视觉隐藏（屏幕阅读器可达，视觉隐藏） */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+/* 暗色主题 token 微调（修复低对比度） */
+:root{--txt3:#888898}

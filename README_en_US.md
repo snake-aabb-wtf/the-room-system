@@ -151,6 +151,13 @@ The room hash is the first 16 chars of sha256(password). You rarely need it — 
 - Grid / list dual view
 - Auto-detects every LAN IP (**survives Wi-Fi / Ethernet switching**)
 - One-click copy address + QR codes
+- 🆕 **Toast notifications** (replace native alert)
+- 🆕 **Modal confirm/prompt** (replace native confirm/prompt)
+- 🆕 **Global 401 intercept + friendly redirect** (expired session auto-returns to login)
+- 🆕 **Full A11Y**: ARIA roles / aria-live / keyboard reachable / focus-visible
+- 🆕 **ESC closes every overlay**
+- 🆕 **Chat: own vs other messages** + system messages
+- 🆕 **Smart scroll + unread message button**
 
 </details>
 

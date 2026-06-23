@@ -1,0 +1,22 @@
+/* Toast 通知 —— 全站通用，v2.1.0 引入 */
+.toast-host{position:fixed;top:18px;right:18px;display:flex;flex-direction:column;gap:8px;z-index:200;pointer-events:none}
+.toast{background:var(--card);border:1px solid var(--border-hi);border-radius:10px;padding:11px 16px;min-width:220px;max-width:380px;
+  box-shadow:0 6px 24px rgba(0,0,0,.4);color:var(--txt);font-size:13.5px;display:flex;align-items:center;gap:10px;pointer-events:auto;
+  animation:toast-in .25s ease-out}
+.toast .x{background:none;border:none;color:var(--txt3);font-size:18px;cursor:pointer;padding:0 2px;line-height:1}
+.toast .x:hover{color:var(--txt)}
+.toast.info{border-left:3px solid var(--info)}
+.toast.success{border-left:3px solid #2ecc71}
+.toast.error{border-left:3px solid var(--danger)}
+.toast .ico{font-size:16px}
+@keyframes toast-in{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+@keyframes toast-out{to{opacity:0;transform:translateX(20px)}}
+
+/* 模态确认框（替代 window.confirm） */
+.modal-confirm{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:180;padding:20px}
+.modal-confirm.show{display:flex}
+.modal-confirm .box{background:var(--card);border:1px solid var(--border-hi);border-radius:12px;padding:22px 24px;max-width:420px;width:100%}
+.modal-confirm h3{margin-bottom:8px;color:#fff;font-size:16px}
+.modal-confirm p{color:var(--txt2);font-size:13.5px;margin-bottom:16px;line-height:1.55}
+.modal-confirm .actions{display:flex;gap:8px;justify-content:flex-end}
+.modal-confirm input{width:100%;margin-bottom:14px}

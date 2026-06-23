@@ -260,6 +260,46 @@ def run_tests(host, port):
     s, d, _, _ = req(host, port, "POST", "/admin/api/cleanup", {"Cookie": asess})
     check("过期清理 API", s == 200 and json.loads(d)["ok"], str(s))
 
+    print("\n=== v2.1.0 体验急救包 ===")
+    # 静态资源就位
+    for path, key in [("/static/toast.js", b"toast"),
+                      ("/static/toast.css", b"toast"),
+                      ("/static/error.js", b"fetch")]:
+        s, data, _, _ = req(host, port, "GET", path)
+        check(f"静态资源 {key}", s == 200 and len(data) > 50, str(s))
+
+    # room.html 关键 A11Y 节点
+    s, html, _, _ = req(host, port, "GET", f"/room/{R}", {"Cookie": sess})
+    html = html.decode("utf-8", "replace")
+    checks_a11y = [
+        ('role="log"', 'aria-log'),
+        ('aria-live="polite"', 'aria-live'),
+        ('aria-label="点击或拖入文件上传"', 'dropzone-aria'),
+        ('role="dialog"', 'modal-dialog'),
+        ('aria-modal="true"', 'aria-modal'),
+        ('role="progressbar"', 'progressbar'),
+        ('role="toolbar"', 'toolbar'),
+        ('新消息', 'unread-bar-text'),
+    ]
+    for needle, name in checks_a11y:
+        check(f"room.html 包含 {name}", needle in html, needle)
+
+    # 鉴权拦截：错口令登录后访问不属于自己的房间 → 拒绝（303 重定向或 403）
+    s, _, bad_cookies, _ = req(host, port, "POST", "/auth",
+                               {"Content-Type": "application/x-www-form-urlencoded"},
+                               body="password=wrong_password_zZ9")
+    bad_sess = bad_cookies.split(";")[0] if bad_cookies else ""
+    s, _, _, _ = req(host, port, "GET", f"/room/0000000000000000", {"Cookie": bad_sess})
+    check("错口令访问他房间被拒", s in (303, 403), str(s))
+
+    # 留言 API：自己发送后能再读到
+    req(host, port, "POST", f"/api/{R}/messages",
+        {"Cookie": sess, "Content-Type": "application/x-www-form-urlencoded"},
+        body="body=v2.1+a11y+chat")
+    s, d, _, _ = req(host, port, "GET", f"/api/{R}/messages", {"Cookie": sess})
+    msgs = json.loads(d)
+    check("留言 v2.1 内容入库", any(m.get("body") == "v2.1 a11y chat" for m in msgs), str(len(msgs)))
+
     print("\n=== WebSocket 实时 (Phase 5) ===")
     try:
         import websockets

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>分享链接 · The Room</title>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/toast.css">
 </head>
 <body>
 <div class="wrap narrow" style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px">
@@ -17,20 +18,24 @@
     {% else %}
       <h1>🔗 收到分享</h1>
       <div class="lead">这是一个有效的房间分享链接。进入房间需要房间口令（向分享者索取）。</div>
-      <div class="err" id="err" style="display:none">口令错误</div>
       <input type="password" id="pw" placeholder="输入房间口令" autofocus
+             aria-label="房间口令"
              onkeydown="if(event.key==='Enter')go()">
       <button class="btn" style="width:100%" onclick="go()">→ 进入房间</button>
     {% endif %}
   </div>
 </div>
+<script src="/static/toast.js"></script>
 <script>
-function go(){
+async function go(){
   var pw=document.getElementById('pw').value.trim();
-  if(!pw)return;
-  fetch('/auth',{method:'POST',body:new URLSearchParams({password:pw})})
-    .then(function(r){if(r.ok){window.location.href='/room';}else{document.getElementById('err').style.display='block';}})
-    .catch(function(){document.getElementById('err').style.display='block';});
+  if(!pw){toast.error('请输入口令'); return;}
+  try{
+    const r=await fetch('/auth',{method:'POST',body:new URLSearchParams({password:pw})});
+    if(r.ok){window.location.href='/room';}
+    else if(r.status===403){toast.error('口令错误');}
+    else{toast.error('登录失败：'+r.status);}
+  }catch(e){}
 }
 </script>
 </body>
